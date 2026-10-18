@@ -45,4 +45,4 @@ The id comes from the host. Failover follows the credential that actually served
 
 Publish a GitHub release tagged v0.1.0. Include checksums.txt and one zip per platform. The zip root contains only the library, for example z-coding-plan.so inside z-coding-plan_0.1.0_linux_amd64.zip.
 
-Registry fields: id z-coding-plan, name Z Coding Plan, author oxwen11, repository https://github.com/oxwen11/cliproxyapi-plugin-z-coding-plan, license MIT.
+Registry fields: id z-coding-plan, name Z Coding Plan, author iamdin, repository https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan, license MIT.

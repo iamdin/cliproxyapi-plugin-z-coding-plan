@@ -1,3 +1,3 @@
-module github.com/oxwen11/cliproxyapi-plugin-z-coding-plan
+module github.com/iamdin/cliproxyapi-plugin-z-coding-plan
 
 go 1.23

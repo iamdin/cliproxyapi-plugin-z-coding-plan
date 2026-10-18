@@ -58,8 +58,8 @@ func registration() map[string]any {
 		"metadata": map[string]any{
 			"Name":             "Z Coding Plan",
 			"Version":          "0.1.0",
-			"Author":           "oxwen11",
-			"GitHubRepository": "https://github.com/oxwen11/cliproxyapi-plugin-z-coding-plan",
+			"Author":           "iamdin",
+			"GitHubRepository": "https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan",
 		},
 		"capabilities": map[string]any{
 			"auth_provider":  true,
