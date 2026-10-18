@@ -37,7 +37,7 @@ The quota page lists the file under provider z-coding-plan. Legacy plans are sho
 
 ## 1308 failover
 
-When a routed request fails with Zhipu error 1308, the plugin remembers that credential id until the reset time in the message. The next selection skips it. If every candidate is blocked, the one that resets soonest is used. Other errors do not block a key. The block list is in memory and clears when the process exits.
+When a routed request fails with Zhipu error 1308 and the message includes a reset time, the plugin remembers that credential id until then. Digits buried in a longer number, or a 1308 message with no reset time, do not block a key. The next selection skips it. If every candidate is blocked, the one that resets soonest is used. Other errors do not block a key. The block list is in memory and clears when the process exits.
 
 The id comes from the host. Failover follows the credential that actually served the request, which is not automatically the quota auth file.
 

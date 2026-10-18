@@ -2,49 +2,37 @@ package main
 
 import (
 	"encoding/json"
-	"strings"
 	"time"
 )
 
 func resetAt(message string, now time.Time) time.Time {
-	if !strings.Contains(message, "1308") {
+	if !code1308(message) {
 		return time.Time{}
 	}
+	zone := time.FixedZone("CST", 8*3600)
 	for i := 0; i+19 <= len(message); i++ {
-		stamp := message[i : i+19]
-		if !clockStamp(stamp) {
-			continue
-		}
-		parsed, err := time.ParseInLocation("2006-01-02 15:04:05", stamp, time.FixedZone("CST", 8*3600))
+		parsed, err := time.ParseInLocation("2006-01-02 15:04:05", message[i:i+19], zone)
 		if err == nil {
 			return parsed
 		}
 	}
-	return now.Add(5 * time.Hour)
+	return time.Time{}
 }
 
-func clockStamp(value string) bool {
-	for i, ch := range value {
-		switch i {
-		case 4, 7:
-			if ch != '-' {
-				return false
-			}
-		case 10:
-			if ch != ' ' {
-				return false
-			}
-		case 13, 16:
-			if ch != ':' {
-				return false
-			}
-		default:
-			if ch < '0' || ch > '9' {
-				return false
-			}
+func code1308(message string) bool {
+	for i := 0; i+4 <= len(message); i++ {
+		if message[i:i+4] != "1308" {
+			continue
 		}
+		if i > 0 && message[i-1] >= '0' && message[i-1] <= '9' {
+			continue
+		}
+		if i+4 < len(message) && message[i+4] >= '0' && message[i+4] <= '9' {
+			continue
+		}
+		return true
 	}
-	return true
+	return false
 }
 
 func pickIndex(until []time.Time, now time.Time) int {

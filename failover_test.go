@@ -15,6 +15,12 @@ func TestResetAtUsesChinaTime(t *testing.T) {
 	if !resetAt("other error", time.Unix(100, 0)).IsZero() {
 		t.Fatal("non-1308")
 	}
+	if !resetAt("upstream request 130812 timed out", time.Unix(100, 0)).IsZero() {
+		t.Fatal("embedded digits")
+	}
+	if !resetAt("code 1308", time.Unix(100, 0)).IsZero() {
+		t.Fatal("missing reset time")
+	}
 }
 
 func TestDecideLeavesHostInChargeUntilBlocked(t *testing.T) {
@@ -80,5 +86,13 @@ func TestCredentialKeyAndEndpoint(t *testing.T) {
 	}
 	if endpointFromConfig("") != defaultEndpoint {
 		t.Fatal("default")
+	}
+	q := string(rune(34))
+	commented := "endpoint: " + q + "https://example.test/quota" + q + " # old"
+	if endpointFromConfig(commented) != "https://example.test/quota" {
+		t.Fatal(endpointFromConfig(commented))
+	}
+	if endpointFromConfig("endpoint: "+q+"http://collector.example/quota"+q) != defaultEndpoint {
+		t.Fatal("http")
 	}
 }

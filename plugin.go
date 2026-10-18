@@ -95,14 +95,17 @@ func endpointFromConfig(yaml string) string {
 		if text == "" || strings.HasPrefix(text, "#") || !strings.HasPrefix(text, "endpoint:") {
 			continue
 		}
-		value := strings.Trim(strings.TrimSpace(strings.TrimPrefix(text, "endpoint:")), "\"'")
-		if value != "" {
+		value := strings.TrimSpace(strings.TrimPrefix(text, "endpoint:"))
+		if cut := strings.IndexAny(value, " 	#"); cut >= 0 {
+			value = strings.TrimSpace(value[:cut])
+		}
+		value = strings.Trim(value, "\"'")
+		if strings.HasPrefix(value, "https://") {
 			return value
 		}
 	}
 	return defaultEndpoint
 }
-
 func parseAuth(request []byte) map[string]any {
 	var req struct {
 		FileName string `json:"FileName"`
@@ -246,7 +249,7 @@ func noteUsage(request []byte) {
 			Body string `json:"Body"`
 		} `json:"Failure"`
 	}
-	if json.Unmarshal(request, &req) != nil || req.AuthID == "" || !strings.Contains(req.Failure.Body, "1308") {
+	if json.Unmarshal(request, &req) != nil || req.AuthID == "" {
 		return
 	}
 	until := resetAt(req.Failure.Body, time.Now())

@@ -87,8 +87,8 @@ func parseZhipuQuota(body []byte, now time.Time) (string, []quotaWindow, error) 
 			used = 100
 		}
 		item := quotaWindow{Label: windowName(kind, unit, number, minutes), Used: used}
-		if reset, ok := whole(raw["nextResetTime"]); ok && reset > 0 && resetIsUsable(kind, minutes, int64(reset), now) {
-			item.Reset = time.UnixMilli(int64(reset)).UTC()
+		if reset, ok := whole64(raw["nextResetTime"]); ok && reset > 0 && resetIsUsable(kind, minutes, reset, now) {
+			item.Reset = time.UnixMilli(reset).UTC()
 			item.HasReset = true
 		}
 		windows = append(windows, item)
@@ -101,11 +101,19 @@ func parseZhipuQuota(body []byte, now time.Time) (string, []quotaWindow, error) 
 }
 
 func whole(value any) (int, bool) {
+	number, ok := whole64(value)
+	if !ok || number > math.MaxInt || number < math.MinInt {
+		return 0, false
+	}
+	return int(number), true
+}
+
+func whole64(value any) (int64, bool) {
 	number, ok := value.(float64)
 	if !ok || math.IsNaN(number) || math.IsInf(number, 0) || number != math.Trunc(number) {
 		return 0, false
 	}
-	return int(number), true
+	return int64(number), true
 }
 
 func windowMinutes(kind string, unit, number int) int {
