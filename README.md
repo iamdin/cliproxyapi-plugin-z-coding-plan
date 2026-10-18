@@ -60,6 +60,10 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
    完成标准：每个额度认证文件都返回窗口，或者返回的错误不是 quota credential not found。
 
+配置成功后，管理页的额度页会列出每把中国区 Coding Plan Key。卡片上的套餐名来自接口，5 小时和 MCP 是两个窗口。数字会随用量变化，下面只是一次成功配置的样子。
+
+![额度页：两把中国区智谱 Coding Plan Key](docs/quota-page.png)
+
 ## 1308 切换
 
 所有路由凭证都正常时，插件不参与选 Key。
