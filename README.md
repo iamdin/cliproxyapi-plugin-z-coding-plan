@@ -21,7 +21,7 @@ Put it in the plugin directory. On Linux amd64 that is plugins/linux/amd64/z-cod
 
 Restart CLIProxyAPI after replacing the library. The host does not unload an old copy inside the same process.
 
-The optional endpoint field overrides the quota URL. The default is https://bigmodel.cn/api/monitor/usage/quota/limit.
+
 
 ## Quota credentials
 
@@ -33,7 +33,7 @@ Add one auth file per key in the host auth directory. These files are for the qu
       "api_key": "YOUR_ZHIPU_KEY"
     }
 
-The quota page lists the file under provider z-coding-plan. Legacy plans are shown as token windows. The current credit plan is shown as credits. MCP is shown separately. A five-hour reset that is more than five hours and one minute ahead is hidden instead of guessing a timezone.
+Quota is always read from https://bigmodel.cn/api/monitor/usage/quota/limit. The quota page lists the file under provider z-coding-plan. Legacy plans are shown as token windows. The current credit plan is shown as credits. MCP is shown separately. A five-hour reset that is more than five hours and one minute ahead is hidden instead of guessing a timezone.
 
 ## 1308 failover
 

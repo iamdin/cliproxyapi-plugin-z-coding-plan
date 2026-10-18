@@ -74,25 +74,10 @@ func TestMock1308SkipsThatKeyUntilReset(t *testing.T) {
 	}
 }
 
-func TestCredentialKeyAndEndpoint(t *testing.T) {
+func TestCredentialKey(t *testing.T) {
 	stored, _ := json.Marshal(map[string]string{"api_key": "secret-value"})
 	key, ok := credentialKey(stored)
 	if !ok || key != "secret-value" {
 		t.Fatalf("%q %v", key, ok)
-	}
-	got := endpointFromConfig("enabled: true" + string(rune(10)) + "endpoint: \"https://example.test/quota\"")
-	if got != "https://example.test/quota" {
-		t.Fatal(got)
-	}
-	if endpointFromConfig("") != defaultEndpoint {
-		t.Fatal("default")
-	}
-	q := string(rune(34))
-	commented := "endpoint: " + q + "https://example.test/quota" + q + " # old"
-	if endpointFromConfig(commented) != "https://example.test/quota" {
-		t.Fatal(endpointFromConfig(commented))
-	}
-	if endpointFromConfig("endpoint: "+q+"http://collector.example/quota"+q) != defaultEndpoint {
-		t.Fatal("http")
 	}
 }

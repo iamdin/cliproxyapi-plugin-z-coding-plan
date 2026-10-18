@@ -8,18 +8,16 @@ import (
 	"time"
 )
 
-const defaultEndpoint = "https://bigmodel.cn/api/monitor/usage/quota/limit"
+const quotaEndpoint = "https://bigmodel.cn/api/monitor/usage/quota/limit"
 
 var (
-	mu       sync.Mutex
-	endpoint = defaultEndpoint
-	blocked  = map[string]time.Time{}
+	mu      sync.Mutex
+	blocked = map[string]time.Time{}
 )
 
 func dispatch(method string, request []byte) ([]byte, error) {
 	switch method {
 	case "plugin.register", "plugin.reconfigure":
-		configure(request)
 		return okResult(registration()), nil
 	case "plugin.quiesce", "plugin.shutdown":
 		clearKeys()
@@ -62,12 +60,6 @@ func registration() map[string]any {
 			"Version":          "0.1.0",
 			"Author":           "oxwen11",
 			"GitHubRepository": "https://github.com/oxwen11/cliproxyapi-plugin-z-coding-plan",
-			"ConfigFields": []map[string]any{{
-				"Name":        "endpoint",
-				"Type":        "string",
-				"Default":     defaultEndpoint,
-				"Description": "Zhipu quota URL. The default is the Coding Plan quota endpoint.",
-			}},
 		},
 		"capabilities": map[string]any{
 			"auth_provider":  true,
@@ -78,34 +70,6 @@ func registration() map[string]any {
 	}
 }
 
-func configure(request []byte) {
-	var req struct {
-		ConfigYAML []byte `json:"config_yaml"`
-	}
-	_ = json.Unmarshal(request, &req)
-	next := endpointFromConfig(string(req.ConfigYAML))
-	mu.Lock()
-	endpoint = next
-	mu.Unlock()
-}
-
-func endpointFromConfig(yaml string) string {
-	for _, line := range strings.Split(yaml, string(rune(10))) {
-		text := strings.TrimSpace(strings.TrimRight(line, string(rune(13))))
-		if text == "" || strings.HasPrefix(text, "#") || !strings.HasPrefix(text, "endpoint:") {
-			continue
-		}
-		value := strings.TrimSpace(strings.TrimPrefix(text, "endpoint:"))
-		if cut := strings.IndexAny(value, " 	#"); cut >= 0 {
-			value = strings.TrimSpace(value[:cut])
-		}
-		value = strings.Trim(value, "\"'")
-		if strings.HasPrefix(value, "https://") {
-			return value
-		}
-	}
-	return defaultEndpoint
-}
 func parseAuth(request []byte) map[string]any {
 	var req struct {
 		FileName string `json:"FileName"`
@@ -152,10 +116,7 @@ func fetchQuota(request []byte) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("quota credential not found")
 	}
-	mu.Lock()
-	quotaURL := endpoint
-	mu.Unlock()
-	plan, buckets, err := queryQuota(quotaURL, key)
+	plan, buckets, err := queryQuota(key)
 	if err != nil {
 		return nil, err
 	}
@@ -186,10 +147,10 @@ func credentialKey(storage []byte) (string, bool) {
 	return key, true
 }
 
-func queryQuota(quotaURL, apiKey string) (string, []map[string]any, error) {
+func queryQuota(apiKey string) (string, []map[string]any, error) {
 	request, _ := json.Marshal(map[string]any{
 		"Method": "GET",
-		"URL":    quotaURL,
+		"URL":    quotaEndpoint,
 		"Headers": map[string][]string{
 			"Authorization": {apiKey},
 			"Accept":        {"application/json"},
@@ -264,7 +225,6 @@ func noteUsage(request []byte) {
 func clearKeys() {
 	mu.Lock()
 	defer mu.Unlock()
-	endpoint = defaultEndpoint
 	blocked = map[string]time.Time{}
 }
 
