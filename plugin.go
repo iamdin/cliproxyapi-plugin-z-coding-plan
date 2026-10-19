@@ -81,15 +81,16 @@ func registration() map[string]any {
 			},
 		},
 		"capabilities": map[string]any{
-			"auth_provider":           true,
-			"quota_provider":          true,
-			"scheduler":               true,
-			"usage_plugin":            true,
-			"model_provider":          true,
-			"executor":                true,
-			"executor_model_scope":    "both",
-			"executor_input_formats":  []string{"claude"},
-			"executor_output_formats": []string{"claude"},
+			"auth_provider":               true,
+			"quota_provider":              true,
+			"scheduler":                   true,
+			"scheduler_across_priorities": true,
+			"usage_plugin":                true,
+			"model_provider":              true,
+			"executor":                    true,
+			"executor_model_scope":        "both",
+			"executor_input_formats":      []string{"claude"},
+			"executor_output_formats":     []string{"claude"},
 		},
 	}
 }
@@ -194,7 +195,27 @@ func queryQuota(apiKey string) (string, []map[string]any, error) {
 type candidate struct {
 	ID         string            `json:"ID"`
 	Provider   string            `json:"Provider"`
+	Priority   int               `json:"Priority"`
 	Attributes map[string]string `json:"Attributes"`
+}
+
+// topTier keeps the highest-priority candidates whose key is not blocked by 1308. The host hands
+// us every priority tier (scheduler_across_priorities), so a blocked high-priority key no longer
+// shadows the lower tier. Callers hold mu.
+func topTier(candidates []candidate, now time.Time) []string {
+	best, ids := 0, []string(nil)
+	for _, c := range candidates {
+		if blocked[c.ID].After(now) {
+			continue
+		}
+		if ids == nil || c.Priority > best {
+			best, ids = c.Priority, nil
+		}
+		if c.Priority == best {
+			ids = append(ids, c.ID)
+		}
+	}
+	return ids
 }
 
 func schedule(request []byte) map[string]any {
@@ -202,15 +223,12 @@ func schedule(request []byte) map[string]any {
 		Candidates []candidate `json:"Candidates"`
 	}
 	_ = json.Unmarshal(request, &req)
-	ids := make([]string, len(req.Candidates))
-	for i, c := range req.Candidates {
-		ids[i] = c.ID
-	}
 	// ponytail: polls every 200ms instead of a wake-up queue; waiters are not FIFO.
 	for start := time.Now(); zhipuOnly(req.Candidates); time.Sleep(pollEvery) {
 		mu.Lock()
 		now := time.Now()
-		if allBlocked(ids, now) || now.Sub(start) > maxWait {
+		ids := topTier(req.Candidates, now)
+		if len(ids) == 0 || now.Sub(start) > maxWait {
 			mu.Unlock()
 			break
 		}

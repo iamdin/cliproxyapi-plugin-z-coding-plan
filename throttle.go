@@ -107,12 +107,3 @@ func zhipuOnly(candidates []candidate) bool {
 	}
 	return len(candidates) > 0
 }
-
-func allBlocked(ids []string, now time.Time) bool {
-	for _, id := range ids {
-		if !blocked[id].After(now) {
-			return false
-		}
-	}
-	return true
-}
