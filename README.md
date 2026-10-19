@@ -106,6 +106,6 @@ messages-endpoint 可改转发地址，只用于核对时指向本地录制转�
 
 ## 发布
 
-发布 tag 为 v0.1.0。附上 checksums.txt，以及每个平台一个 zip。zip 根目录只放动态库，例如 z-coding-plan_0.1.0_linux_amd64.zip 里直接是 z-coding-plan.so。
+发布 tag 为 v0.2.0。附上 checksums.txt，以及每个平台一个 zip。zip 根目录只放动态库，例如 z-coding-plan_0.2.0_linux_amd64.zip 里直接是 z-coding-plan.so。
 
 登记字段：id 为 z-coding-plan，name 为 Z Coding Plan，author 为 iamdin，repository 为 https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan，license 为 MIT。
