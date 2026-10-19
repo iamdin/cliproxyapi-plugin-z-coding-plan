@@ -47,9 +47,9 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
    完成标准：每个文件都是合法 JSON，api_key 非空，type 正好是 z-coding-plan。
 
-4. 请求路由仍放在宿主已有的上游 Key 列表里。本插件不复制这些 Key，也不会自己发模型请求。额度认证文件不会变成路由 Key。
+4. 额度认证文件同时是 glm-5.3、glm-5.3-flash 的路由凭证，请求由本插件原样转发给智谱，见下文原样转发。宿主上游配置里承接同一批 Key 的 glm 条目要排除这两个模型。
 
-   完成标准：要承接 glm-5.3 流量的同一批智谱 Key，仍然留在宿主的上游配置里。
+   完成标准：GET /v1/models 里有 glm-5.3，宿主日志里请求的凭证是 z-coding-plan 文件。
 
 5. 重启 CLIProxyAPI。替换 .so 不会影响已经加载它的进程。
 
