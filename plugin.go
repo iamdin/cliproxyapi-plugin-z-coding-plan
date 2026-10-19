@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +23,7 @@ func dispatch(method string, request []byte) ([]byte, error) {
 		configure(request)
 		return okResult(registration()), nil
 	case "plugin.quiesce", "plugin.shutdown":
+		stopWarmup()
 		clearKeys()
 		return okResult(map[string]any{}), nil
 	case "auth.identifier", "quota.identifier":
@@ -64,6 +67,8 @@ func registration() map[string]any {
 			"ConfigFields": []map[string]any{
 				{"Name": "min-concurrency", "Type": "integer", "Default": 8, "Description": "每把智谱 Key 的起始和最低并发数"},
 				{"Name": "max-concurrency", "Type": "integer", "Default": 64, "Description": "每把智谱 Key 的最高并发数"},
+				{"Name": "quota-warmup-times", "Type": "string", "Default": "", "Description": "北京时间，逗号分隔，如 03:00,08:00,13:00,18:00,23:00；到点用 1 token 请求开启每把 Key 的 5 小时窗口，留空关闭"},
+				{"Name": "quota-warmup-model", "Type": "string", "Default": defaultWarmupModel, "Description": "quota-warmup 请求使用的模型"},
 			},
 		},
 		"capabilities": map[string]any{
@@ -153,33 +158,7 @@ func credentialKey(storage []byte) (string, bool) {
 }
 
 func queryQuota(apiKey string) (string, []map[string]any, error) {
-	request, _ := json.Marshal(map[string]any{
-		"Method": "GET",
-		"URL":    quotaEndpoint,
-		"Headers": map[string][]string{
-			"Authorization": {apiKey},
-			"Accept":        {"application/json"},
-		},
-	})
-	raw, err := callHost("host.http.do", request)
-	if err != nil {
-		return "", nil, err
-	}
-	var env envelope
-	if json.Unmarshal(raw, &env) != nil || !env.OK {
-		return "", nil, fmt.Errorf("quota request failed")
-	}
-	var response struct {
-		StatusCode int    `json:"StatusCode"`
-		Body       []byte `json:"Body"`
-	}
-	if json.Unmarshal(env.Result, &response) != nil {
-		return "", nil, fmt.Errorf("quota response unreadable")
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", nil, fmt.Errorf("quota http %d", response.StatusCode)
-	}
-	plan, windows, err := parseZhipuQuota(response.Body, time.Now())
+	plan, windows, err := quotaWindows(apiKey)
 	if err != nil {
 		return "", nil, err
 	}
@@ -287,4 +266,83 @@ type envelope struct {
 type envelopeError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+func quotaWindows(apiKey string) (string, []quotaWindow, error) {
+	status, body, err := httpDo("GET", quotaEndpoint, map[string][]string{
+		"Authorization": {apiKey},
+		"Accept":        {"application/json"},
+	}, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	if status < 200 || status >= 300 {
+		return "", nil, fmt.Errorf("quota http %d", status)
+	}
+	return parseZhipuQuota(body, time.Now())
+}
+
+func httpDo(method, url string, headers map[string][]string, body []byte) (int, []byte, error) {
+	request, _ := json.Marshal(map[string]any{"Method": method, "URL": url, "Headers": headers, "Body": body})
+	raw, err := callHost("host.http.do", request)
+	if err != nil {
+		return 0, nil, err
+	}
+	var env envelope
+	if json.Unmarshal(raw, &env) != nil || !env.OK {
+		return 0, nil, fmt.Errorf("%s %s failed", method, url)
+	}
+	var response struct {
+		StatusCode int    `json:"StatusCode"`
+		Body       []byte `json:"Body"`
+	}
+	if json.Unmarshal(env.Result, &response) != nil {
+		return 0, nil, fmt.Errorf("%s %s response unreadable", method, url)
+	}
+	return response.StatusCode, response.Body, nil
+}
+
+// configure reads the plugin's config YAML: min-concurrency / max-concurrency (see throttle.go)
+// and quota-warmup-times / quota-warmup-model (see warmup.go).
+// ponytail: flat "key: value" lines only; swap in a YAML parser if nested config appears.
+func configure(request []byte) {
+	var req struct {
+		ConfigYAML []byte `json:"config_yaml"`
+	}
+	_ = json.Unmarshal(request, &req)
+	lo, hi := defaultMinLimit, defaultMaxLimit
+	var times []int
+	model := defaultWarmupModel
+	for _, line := range strings.Split(string(req.ConfigYAML), "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		n, err := strconv.ParseFloat(value, 64)
+		switch strings.TrimSpace(key) {
+		case "min-concurrency":
+			if err == nil && n >= 1 {
+				lo = math.Floor(n)
+			}
+		case "max-concurrency":
+			if err == nil && n >= 1 {
+				hi = math.Floor(n)
+			}
+		case "quota-warmup-times":
+			times = parseTimes(value)
+		case "quota-warmup-model":
+			if value != "" {
+				model = value
+			}
+		}
+	}
+	mu.Lock()
+	minLimit, maxLimit = lo, max(lo, hi)
+	for _, k := range keys {
+		k.limit = min(maxLimit, max(minLimit, k.limit))
+	}
+	warmupTimes, warmupModel = times, model
+	mu.Unlock()
+	restartWarmup()
 }

@@ -13,6 +13,7 @@ type quotaWindow struct {
 	Used     float64
 	Reset    time.Time
 	HasReset bool
+	FiveHour bool // the 5-hour token window that quota-warmup anchors
 }
 
 func parseZhipuQuota(body []byte, now time.Time) (string, []quotaWindow, error) {
@@ -86,7 +87,7 @@ func parseZhipuQuota(body []byte, now time.Time) (string, []quotaWindow, error) 
 		if used > 100 {
 			used = 100
 		}
-		item := quotaWindow{Label: windowName(kind, unit, number, minutes), Used: used}
+		item := quotaWindow{Label: windowName(kind, unit, number, minutes), Used: used, FiveHour: kind == "TOKENS_LIMIT" && minutes == 300}
 		if reset, ok := whole64(raw["nextResetTime"]); ok && reset > 0 && resetIsUsable(kind, minutes, reset, now) {
 			item.Reset = time.UnixMilli(reset).UTC()
 			item.HasReset = true

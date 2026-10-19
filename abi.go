@@ -79,7 +79,10 @@ func cliproxyPluginFree(ptr unsafe.Pointer, length C.size_t) {
 }
 
 //export cliproxyPluginShutdown
-func cliproxyPluginShutdown() { clearKeys() }
+func cliproxyPluginShutdown() {
+	stopWarmup()
+	clearKeys()
+}
 
 func writeBuffer(response *C.cliproxy_buffer, raw []byte) {
 	if response == nil || len(raw) == 0 {

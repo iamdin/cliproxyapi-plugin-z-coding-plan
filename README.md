@@ -21,7 +21,7 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
    完成标准：该路径存在，且文件名正好是 z-coding-plan.so。
 
-2. 在 CONFIG/config.yaml 里启用插件。宿主读 enabled 和 priority；min-concurrency、max-concurrency 可省略，见下文 1302 限流。
+2. 在 CONFIG/config.yaml 里启用插件。宿主读 enabled 和 priority；min-concurrency、max-concurrency 见下文 1302 限流，quota-warmup-times、quota-warmup-model 见下文额度预热，都可省略。
 
         plugins:
           enabled: true
@@ -31,6 +31,7 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
               priority: 1
               min-concurrency: 8
               max-concurrency: 64
+              quota-warmup-times: "03:00,08:00,13:00,18:00,23:00"
 
    完成标准：plugins.enabled 为 true，且 plugins.configs.z-coding-plan.enabled 为 true。
 
@@ -83,6 +84,14 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 收到 1302 时，这把 Key 的并发上限减半（不低于 min-concurrency），并暂停一段时间：2 秒起，连续限流翻倍，最长 60 秒，带随机抖动。同一波里同时回来的多个 1302 只算一次。暂停到期后成功一次，退避重新从 2 秒算。
 
 没有空位的请求在选 Key 时排队，每 200 毫秒看一次，最多等 90 秒，超时后交回宿主。所有候选都因 1308 停用时不排队。占用的并发位置在请求结束时释放，5 分钟内没有结束记录也会自动释放。这些状态同样只在内存里。
+
+## 额度预热（quota-warmup）
+
+智谱 5 小时额度从窗口内第一次调用开始计时。配置 quota-warmup-times 后，插件每天在这些北京时间点，用每个 z-coding-plan 额度认证文件里的 Key 直接向智谱发一个 max_tokens 为 1 的请求（模型默认 glm-5.3，可用 quota-warmup-model 改），提前开启窗口。留空或省略即关闭。
+
+到点时先查这把 Key 的 5 小时窗口：1 小时内会重置的，等重置后 3 秒再发；还要 1 小时以上才重置的，这次跳过。每次结果写进 CPA 日志，前缀 quota-warmup。
+
+推荐 03:00,08:00,13:00,18:00,23:00：14:00 到 18:00 的双倍消耗时段整个落在 13:00 开始的窗口里，18:00 一到就是新窗口。
 
 ## 发布
 

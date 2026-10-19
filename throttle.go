@@ -1,10 +1,7 @@
 package main
 
 import (
-	"encoding/json"
-	"math"
 	"math/rand"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -118,33 +115,4 @@ func allBlocked(ids []string, now time.Time) bool {
 		}
 	}
 	return true
-}
-
-// configure reads min-concurrency / max-concurrency from the plugin's config YAML.
-// ponytail: flat "key: number" lines only; swap in a YAML parser if nested config appears.
-func configure(request []byte) {
-	var req struct {
-		ConfigYAML []byte `json:"config_yaml"`
-	}
-	_ = json.Unmarshal(request, &req)
-	lo, hi := defaultMinLimit, defaultMaxLimit
-	for _, line := range strings.Split(string(req.ConfigYAML), "\n") {
-		key, value, ok := strings.Cut(line, ":")
-		n, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-		if !ok || err != nil || n < 1 {
-			continue
-		}
-		switch strings.TrimSpace(key) {
-		case "min-concurrency":
-			lo = math.Floor(n)
-		case "max-concurrency":
-			hi = math.Floor(n)
-		}
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	minLimit, maxLimit = lo, max(lo, hi)
-	for _, k := range keys {
-		k.limit = min(maxLimit, max(minLimit, k.limit))
-	}
 }
