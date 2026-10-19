@@ -26,7 +26,7 @@ func dispatch(method string, request []byte) ([]byte, error) {
 		stopWarmup()
 		clearKeys()
 		return okResult(map[string]any{}), nil
-	case "auth.identifier", "quota.identifier":
+	case "auth.identifier", "quota.identifier", "executor.identifier":
 		return okResult(map[string]string{"identifier": "z-coding-plan"}), nil
 	case "auth.parse":
 		return okResult(parseAuth(request)), nil
@@ -51,6 +51,14 @@ func dispatch(method string, request []byte) ([]byte, error) {
 	case "usage.handle":
 		noteUsage(request)
 		return okResult(map[string]any{}), nil
+	case "model.static":
+		return okResult(map[string]any{"Provider": "z-coding-plan"}), nil
+	case "model.for_auth":
+		return okResult(authModels()), nil
+	case "executor.execute":
+		return execute(request), nil
+	case "executor.execute_stream":
+		return executeStream(request), nil
 	default:
 		return nil, fmt.Errorf("unknown method %s", method)
 	}
@@ -69,13 +77,19 @@ func registration() map[string]any {
 				{"Name": "max-concurrency", "Type": "integer", "Default": 64, "Description": "每把智谱 Key 的最高并发数"},
 				{"Name": "quota-warmup-times", "Type": "string", "Default": "", "Description": "北京时间，逗号分隔，如 03:00,08:00,13:00,18:00,23:00；到点用 1 token 请求开启每把 Key 的 5 小时窗口，留空关闭"},
 				{"Name": "quota-warmup-model", "Type": "string", "Default": defaultWarmupModel, "Description": "quota-warmup 请求使用的模型"},
+				{"Name": "messages-endpoint", "Type": "string", "Default": defaultMessagesEndpoint, "Description": "原样转发的智谱 Anthropic Messages 地址（核对转发时可指向本地抓包服务）"},
 			},
 		},
 		"capabilities": map[string]any{
-			"auth_provider":  true,
-			"quota_provider": true,
-			"scheduler":      true,
-			"usage_plugin":   true,
+			"auth_provider":           true,
+			"quota_provider":          true,
+			"scheduler":               true,
+			"usage_plugin":            true,
+			"model_provider":          true,
+			"executor":                true,
+			"executor_model_scope":    "both",
+			"executor_input_formats":  []string{"claude"},
+			"executor_output_formats": []string{"claude"},
 		},
 	}
 }
@@ -179,6 +193,7 @@ func queryQuota(apiKey string) (string, []map[string]any, error) {
 
 type candidate struct {
 	ID         string            `json:"ID"`
+	Provider   string            `json:"Provider"`
 	Attributes map[string]string `json:"Attributes"`
 }
 
@@ -252,8 +267,12 @@ func okResult(value any) []byte {
 	return out
 }
 
-func errorEnvelope(code, message string) []byte {
-	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
+func errorEnvelope(code, message string, httpStatus ...int) []byte {
+	e := &envelopeError{Code: code, Message: message}
+	if len(httpStatus) > 0 {
+		e.HTTPStatus = httpStatus[0]
+	}
+	raw, _ := json.Marshal(envelope{OK: false, Error: e})
 	return raw
 }
 
@@ -264,8 +283,9 @@ type envelope struct {
 }
 
 type envelopeError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code       string `json:"code"`
+	Message    string `json:"message"`
+	HTTPStatus int    `json:"http_status,omitempty"`
 }
 
 func quotaWindows(apiKey string) (string, []quotaWindow, error) {
@@ -313,6 +333,7 @@ func configure(request []byte) {
 	lo, hi := defaultMinLimit, defaultMaxLimit
 	var times []int
 	model := defaultWarmupModel
+	endpoint := defaultMessagesEndpoint
 	for _, line := range strings.Split(string(req.ConfigYAML), "\n") {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
@@ -335,6 +356,10 @@ func configure(request []byte) {
 			if value != "" {
 				model = value
 			}
+		case "messages-endpoint":
+			if value != "" {
+				endpoint = value
+			}
 		}
 	}
 	mu.Lock()
@@ -343,6 +368,7 @@ func configure(request []byte) {
 		k.limit = min(maxLimit, max(minLimit, k.limit))
 	}
 	warmupTimes, warmupModel = times, model
+	messagesEndpoint = endpoint
 	mu.Unlock()
 	restartWarmup()
 }

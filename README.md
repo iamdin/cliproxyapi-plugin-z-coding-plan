@@ -67,6 +67,17 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
 ![额度页：两把中国区智谱 Coding Plan Key](docs/quota-page.png)
 
+## 原样转发
+
+插件同时是 glm-5.3、glm-5.3-flash 的执行器：路由到 z-coding-plan 凭证的 Anthropic Messages 请求，请求体按客户端发来的字节原样发到 https://open.bigmodel.cn/api/anthropic/v1/messages，客户端请求头原样带上，只把鉴权换成该凭证的 Key（X-Api-Key），并去掉逐跳头和转发头；响应按 SSE 事件原样流回。智谱的错误状态码和正文原样交回宿主，1302、1308 处理照旧。
+
+CPA 自带的 claude 执行器会改写请求（Claude Code 伪装、删 thinking、工具改名、地址加 ?beta=true），要让经 CPA 的调用与直连一致，就让 glm 只走本插件：
+
+- api-keys.claude 里承接智谱的条目用 excluded-models 排除这两个模型（或删掉条目），否则宿主会在两条路之间轮换；
+- 1302 换 Key 不冷却：在 oauth.request-scoped-errors 下给 z-coding-plan 配 status 429、match "1302"、action continue。
+
+messages-endpoint 可改转发地址，只用于核对时指向本地录制转发，平时不要配。
+
 ## 1308 切换
 
 所有路由凭证都正常时，插件不参与选 Key。
