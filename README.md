@@ -21,7 +21,7 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
    完成标准：该路径存在，且文件名正好是 z-coding-plan.so。
 
-2. 在 CONFIG/config.yaml 里启用插件。宿主在这里只读 enabled 和 priority，z-coding-plan 下面不要加别的字段。
+2. 在 CONFIG/config.yaml 里启用插件。宿主读 enabled 和 priority；min-concurrency、max-concurrency 可省略，见下文 1302 限流。
 
         plugins:
           enabled: true
@@ -29,6 +29,8 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
             z-coding-plan:
               enabled: true
               priority: 1
+              min-concurrency: 8
+              max-concurrency: 64
 
    完成标准：plugins.enabled 为 true，且 plugins.configs.z-coding-plan.enabled 为 true。
 
@@ -73,6 +75,14 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 下一次选择会跳过已停用的凭证 id。如果候选全部停用，就用重置时间最早的那把。停用名单只在内存里，进程退出或插件卸载后清空。
 
 被停用的 id 是实际发出请求的宿主凭证 id，不是额度文件名，除非宿主路由用的就是那个文件。
+
+## 1302 限流
+
+候选全是智谱 Key（base_url 含 bigmodel.cn）时，插件按 Key 控制并发。每把 Key 起始允许 min-concurrency 个并发请求（默认 8），每成功一次慢慢加，最多 max-concurrency 个（默认 64）。宿主注册或重新配置插件时读取这两个值。
+
+收到 1302 时，这把 Key 的并发上限减半（不低于 min-concurrency），并暂停一段时间：2 秒起，连续限流翻倍，最长 60 秒，带随机抖动。同一波里同时回来的多个 1302 只算一次。暂停到期后成功一次，退避重新从 2 秒算。
+
+没有空位的请求在选 Key 时排队，每 200 毫秒看一次，最多等 90 秒，超时后交回宿主。所有候选都因 1308 停用时不排队。占用的并发位置在请求结束时释放，5 分钟内没有结束记录也会自动释放。这些状态同样只在内存里。
 
 ## 发布
 

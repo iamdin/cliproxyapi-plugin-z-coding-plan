@@ -18,6 +18,7 @@ var (
 func dispatch(method string, request []byte) ([]byte, error) {
 	switch method {
 	case "plugin.register", "plugin.reconfigure":
+		configure(request)
 		return okResult(registration()), nil
 	case "plugin.quiesce", "plugin.shutdown":
 		clearKeys()
@@ -60,6 +61,10 @@ func registration() map[string]any {
 			"Version":          "0.1.0",
 			"Author":           "iamdin",
 			"GitHubRepository": "https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan",
+			"ConfigFields": []map[string]any{
+				{"Name": "min-concurrency", "Type": "integer", "Default": 8, "Description": "每把智谱 Key 的起始和最低并发数"},
+				{"Name": "max-concurrency", "Type": "integer", "Default": 64, "Description": "每把智谱 Key 的最高并发数"},
+			},
 		},
 		"capabilities": map[string]any{
 			"auth_provider":  true,
@@ -193,7 +198,34 @@ func queryQuota(apiKey string) (string, []map[string]any, error) {
 	return plan, buckets, nil
 }
 
+type candidate struct {
+	ID         string            `json:"ID"`
+	Attributes map[string]string `json:"Attributes"`
+}
+
 func schedule(request []byte) map[string]any {
+	var req struct {
+		Candidates []candidate `json:"Candidates"`
+	}
+	_ = json.Unmarshal(request, &req)
+	ids := make([]string, len(req.Candidates))
+	for i, c := range req.Candidates {
+		ids[i] = c.ID
+	}
+	// ponytail: polls every 200ms instead of a wake-up queue; waiters are not FIFO.
+	for start := time.Now(); zhipuOnly(req.Candidates); time.Sleep(pollEvery) {
+		mu.Lock()
+		now := time.Now()
+		if allBlocked(ids, now) || now.Sub(start) > maxWait {
+			mu.Unlock()
+			break
+		}
+		id, ok := takeSlot(ids, now)
+		mu.Unlock()
+		if ok {
+			return map[string]any{"Handled": true, "AuthID": id}
+		}
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	id, handled := decide(request, time.Now(), blocked)
@@ -206,6 +238,7 @@ func schedule(request []byte) map[string]any {
 func noteUsage(request []byte) {
 	var req struct {
 		AuthID  string `json:"AuthID"`
+		Failed  bool   `json:"Failed"`
 		Failure struct {
 			Body string `json:"Body"`
 		} `json:"Failure"`
@@ -213,19 +246,25 @@ func noteUsage(request []byte) {
 	if json.Unmarshal(request, &req) != nil || req.AuthID == "" {
 		return
 	}
-	until := resetAt(req.Failure.Body, time.Now())
-	if until.IsZero() || !until.After(time.Now()) {
-		return
-	}
+	now := time.Now()
 	mu.Lock()
-	blocked[req.AuthID] = until
-	mu.Unlock()
+	defer mu.Unlock()
+	release(req.AuthID)
+	switch until := resetAt(req.Failure.Body, now); {
+	case until.After(now):
+		blocked[req.AuthID] = until
+	case hasCode(req.Failure.Body, "1302"):
+		throttled(req.AuthID, now)
+	case !req.Failed:
+		succeeded(req.AuthID, now)
+	}
 }
 
 func clearKeys() {
 	mu.Lock()
 	defer mu.Unlock()
 	blocked = map[string]time.Time{}
+	keys = map[string]*keyState{}
 }
 
 func okResult(value any) []byte {

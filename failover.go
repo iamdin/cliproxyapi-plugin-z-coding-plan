@@ -19,9 +19,12 @@ func resetAt(message string, now time.Time) time.Time {
 	return time.Time{}
 }
 
-func code1308(message string) bool {
+func code1308(message string) bool { return hasCode(message, "1308") }
+
+// hasCode reports whether code appears in message as a standalone number.
+func hasCode(message, code string) bool {
 	for i := 0; i+4 <= len(message); i++ {
-		if message[i:i+4] != "1308" {
+		if message[i:i+4] != code {
 			continue
 		}
 		if i > 0 && message[i-1] >= '0' && message[i-1] <= '9' {
