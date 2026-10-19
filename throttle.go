@@ -101,18 +101,9 @@ func succeeded(id string, now time.Time) {
 
 func zhipuOnly(candidates []candidate) bool {
 	for _, c := range candidates {
-		if !strings.Contains(c.Attributes["base_url"], "bigmodel.cn") {
+		if c.Provider != "z-coding-plan" && !strings.Contains(c.Attributes["base_url"], "bigmodel.cn") {
 			return false
 		}
 	}
 	return len(candidates) > 0
-}
-
-func allBlocked(ids []string, now time.Time) bool {
-	for _, id := range ids {
-		if !blocked[id].After(now) {
-			return false
-		}
-	}
-	return true
 }

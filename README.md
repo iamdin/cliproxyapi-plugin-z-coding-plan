@@ -47,9 +47,9 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
    完成标准：每个文件都是合法 JSON，api_key 非空，type 正好是 z-coding-plan。
 
-4. 请求路由仍放在宿主已有的上游 Key 列表里。本插件不复制这些 Key，也不会自己发模型请求。额度认证文件不会变成路由 Key。
+4. 额度认证文件同时是 glm-5.3、glm-5.3-flash 的路由凭证，请求由本插件原样转发给智谱，见下文原样转发。宿主上游配置里承接同一批 Key 的 glm 条目要排除这两个模型。
 
-   完成标准：要承接 glm-5.3 流量的同一批智谱 Key，仍然留在宿主的上游配置里。
+   完成标准：GET /v1/models 里有 glm-5.3，宿主日志里请求的凭证是 z-coding-plan 文件。
 
 5. 重启 CLIProxyAPI。替换 .so 不会影响已经加载它的进程。
 
@@ -67,13 +67,24 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
 ![额度页：两把中国区智谱 Coding Plan Key](docs/quota-page.png)
 
+## 原样转发
+
+插件同时是 glm-5.3、glm-5.3-flash 的执行器：路由到 z-coding-plan 凭证的 Anthropic Messages 请求，请求体按客户端发来的字节原样发到 https://open.bigmodel.cn/api/anthropic/v1/messages，客户端请求头原样带上，只把鉴权换成该凭证的 Key（X-Api-Key），并去掉逐跳头和转发头；响应按 SSE 事件原样流回。智谱的错误状态码和正文原样交回宿主，1302、1308 处理照旧。
+
+CPA 自带的 claude 执行器会改写请求（Claude Code 伪装、删 thinking、工具改名、地址加 ?beta=true），要让经 CPA 的调用与直连一致，就让 glm 只走本插件：
+
+- api-keys.claude 里承接智谱的条目用 excluded-models 排除这两个模型（或删掉条目），否则宿主会在两条路之间轮换；
+- 1302 换 Key 不冷却：在 oauth.request-scoped-errors 下给 z-coding-plan 配 status 429、match "1302"、action continue。
+
+messages-endpoint 可改转发地址，只用于核对时指向本地录制转发，平时不要配。
+
 ## 1308 切换
 
 所有路由凭证都正常时，插件不参与选 Key。
 
 请求失败后，只有错误文本里的 1308 是独立数字，并且带有 YYYY-MM-DD HH:MM:SS 时间戳，才会停用那把凭证。时间按中国时间（UTC+8）读取，停用到该时刻。130812 不算。只有 1308、没有时间戳，也不停用。其他错误不停用。
 
-下一次选择会跳过已停用的凭证 id。如果候选全部停用，就用重置时间最早的那把。停用名单只在内存里，进程退出或插件卸载后清空。
+下一次选择会跳过已停用的凭证 id。插件向宿主声明要看全部优先级的候选（scheduler_across_priorities），在没停用的凭证里先用凭证文件 priority 最高的那一档；否则高优先级那把停用后，宿主只给这一把，每个请求都会先撞一次 1308 才换 Key。如果候选全部停用，就用重置时间最早的那把。停用名单只在内存里，进程退出或插件卸载后清空。
 
 被停用的 id 是实际发出请求的宿主凭证 id，不是额度文件名，除非宿主路由用的就是那个文件。
 
@@ -95,6 +106,6 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
 ## 发布
 
-发布 tag 为 v0.1.0。附上 checksums.txt，以及每个平台一个 zip。zip 根目录只放动态库，例如 z-coding-plan_0.1.0_linux_amd64.zip 里直接是 z-coding-plan.so。
+发布 tag 为 v0.2.0。附上 checksums.txt，以及每个平台一个 zip。zip 根目录只放动态库，例如 z-coding-plan_0.2.0_linux_amd64.zip 里直接是 z-coding-plan.so。
 
 登记字段：id 为 z-coding-plan，name 为 Z Coding Plan，author 为 iamdin，repository 为 https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan，license 为 MIT。

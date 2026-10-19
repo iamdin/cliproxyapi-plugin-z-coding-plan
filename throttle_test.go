@@ -104,6 +104,23 @@ func TestScheduleWaitsForFreeSlot(t *testing.T) {
 	}
 }
 
+func TestSchedulePrefersPriorityUntil1308(t *testing.T) {
+	resetState(t)
+	raw, _ := json.Marshal(map[string]any{"Candidates": []map[string]any{
+		{"ID": "low", "Provider": "z-coding-plan"},
+		{"ID": "high", "Provider": "z-coding-plan", "Priority": 10},
+	}})
+	if got := schedule(raw); got["AuthID"] != "high" {
+		t.Fatalf("higher priority key first: %v", got)
+	}
+	noteUsage([]byte(`{"AuthID":"high","Failed":true,"Failure":{"Body":"[1308][已达到 5 小时的使用上限。您的限额将在 2099-01-01 08:00:00 重置。]"}}`))
+	for i := 0; i < 3; i++ {
+		if got := schedule(raw); got["AuthID"] != "low" {
+			t.Fatalf("1308 key must be skipped on later requests: %v", got)
+		}
+	}
+}
+
 func TestConfigureReadsConcurrencyBounds(t *testing.T) {
 	resetState(t)
 	t.Cleanup(func() { configure(nil) })
