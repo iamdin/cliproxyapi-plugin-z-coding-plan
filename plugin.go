@@ -69,7 +69,7 @@ func registration() map[string]any {
 		"schema_version": 6,
 		"metadata": map[string]any{
 			"Name":             "Z Coding Plan",
-			"Version":          "0.2.1",
+			"Version":          "0.2.2",
 			"Author":           "iamdin",
 			"GitHubRepository": "https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan",
 			"ConfigFields": []map[string]any{

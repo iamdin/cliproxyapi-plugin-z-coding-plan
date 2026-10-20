@@ -26,6 +26,7 @@ var (
 	warmupTimes []int // minutes after midnight, Beijing time; plugins.configs.z-coding-plan.quota-warmup-times
 	warmupModel = defaultWarmupModel
 	warmupStop  chan struct{}
+	warmupKey   string // schedule+model of the running loop; unchanged config keeps it
 	warmupWG    sync.WaitGroup
 	warmupMu    sync.Mutex // guards warmupStop; separate from mu so scheduling never waits on a warmup run
 )
@@ -63,18 +64,26 @@ func nextRun(times []int, now time.Time) time.Time {
 	return time.Time{}
 }
 
-// restartWarmup stops any running loop and starts one for the current config.
+// restartWarmup starts a loop for the current config, replacing a running one only if the config changed.
+// The host reconfigures several times at startup; those calls leave the loop alone.
 func restartWarmup() {
-	stopWarmup()
 	mu.Lock()
 	times, model := warmupTimes, warmupModel
 	mu.Unlock()
+	key := formatTimes(times) + "|" + model
+	warmupMu.Lock()
+	running := warmupStop != nil && warmupKey == key
+	warmupMu.Unlock()
+	if running {
+		return
+	}
+	stopWarmup()
 	if len(times) == 0 {
 		return
 	}
 	stop := make(chan struct{})
 	warmupMu.Lock()
-	warmupStop = stop
+	warmupStop, warmupKey = stop, key
 	warmupMu.Unlock()
 	warmupWG.Add(1)
 	go func() {

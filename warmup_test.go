@@ -48,6 +48,16 @@ func TestConfigureReadsWarmupSettings(t *testing.T) {
 	if !running {
 		t.Fatal("warmup loop should be running")
 	}
+	warmupMu.Lock()
+	first := warmupStop
+	warmupMu.Unlock()
+	configure(raw) // host reconfigures with the same settings: keep the loop
+	warmupMu.Lock()
+	same := warmupStop == first
+	warmupMu.Unlock()
+	if !same {
+		t.Fatal("unchanged config should not restart the loop")
+	}
 	stopWarmup()
 	configure(nil)
 	if warmupTimes != nil || warmupModel != defaultWarmupModel || warmupStop != nil {
