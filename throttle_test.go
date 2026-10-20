@@ -16,7 +16,7 @@ func TestSlotsCapConcurrencyPerKey(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	var got []string
 	for {
-		id, ok := takeSlot([]string{"a", "b"}, now)
+		id, ok := takeSlot([]string{"a", "b"}, now, "", false)
 		if !ok {
 			break
 		}
@@ -26,10 +26,10 @@ func TestSlotsCapConcurrencyPerKey(t *testing.T) {
 		t.Fatalf("want %v slots per key, got %v", minLimit, got)
 	}
 	release("a")
-	if id, ok := takeSlot([]string{"a", "b"}, now); !ok || id != "a" {
+	if id, ok := takeSlot([]string{"a", "b"}, now, "", false); !ok || id != "a" {
 		t.Fatalf("released slot not reused: %s %v", id, ok)
 	}
-	if _, ok := takeSlot([]string{"a"}, now.Add(leaseTTL)); !ok {
+	if _, ok := takeSlot([]string{"a"}, now.Add(leaseTTL), "", false); !ok {
 		t.Fatal("stale leases should expire")
 	}
 }
@@ -44,7 +44,7 @@ func Test1302HalvesOncePerBurstAndBacksOff(t *testing.T) {
 	if k.limit != 16 || k.level != 1 {
 		t.Fatalf("limit %v level %d", k.limit, k.level)
 	}
-	if _, ok := takeSlot([]string{"a"}, now); ok {
+	if _, ok := takeSlot([]string{"a"}, now, "", false); ok {
 		t.Fatal("paused key handed out")
 	}
 	first := k.pausedUntil.Sub(now)
@@ -138,5 +138,38 @@ func TestConfigureReadsConcurrencyBounds(t *testing.T) {
 	configure([]byte(`{"config_yaml":"ZW5hYmxlZDogdHJ1ZQo="}`))
 	if minLimit != defaultMinLimit || maxLimit != defaultMaxLimit {
 		t.Fatal("omitted fields should fall back to defaults")
+	}
+}
+
+func TestSessionStaysOnItsKeyUntilItCannot(t *testing.T) {
+	resetState(t)
+	now := time.Unix(1_800_000_000, 0)
+	ab := []string{"a", "b"}
+	if got := sessionKey(map[string][]string{"X-Claude-Code-Session-Id": {"s1"}}, nil); got != "s1" {
+		t.Fatal(got)
+	}
+	if got := sessionKey(nil, map[string]any{"parent_session_id": "p", "canonical_session_id": "c"}); got != "p" {
+		t.Fatalf("subagent should follow parent: %s", got)
+	}
+	bind("s1", "b", now)
+	for i := 0; i < 3; i++ { // round-robin would alternate; the bound key must win every time
+		if id, ok := takeSlot(ab, now, boundKey("s1", now), true); !ok || id != "b" {
+			t.Fatalf("%s %v", id, ok)
+		}
+	}
+	state("b").limit = 3 // b is now full: hold for it, then give up and move
+	if _, ok := takeSlot(ab, now, "b", true); ok {
+		t.Fatal("should keep waiting for the bound key")
+	}
+	if id, ok := takeSlot(ab, now, "b", false); !ok || id != "a" {
+		t.Fatalf("after the wait the session moves: %s %v", id, ok)
+	}
+	throttled("a", now) // a paused by 1302: a session bound to a moves immediately, even while holding
+	release("b")
+	if id, ok := takeSlot(ab, now, "a", true); !ok || id != "b" {
+		t.Fatalf("paused bound key must not hold the session: %s %v", id, ok)
+	}
+	if boundKey("s1", now.Add(stickyTTL+time.Second)) != "" {
+		t.Fatal("binding should expire")
 	}
 }

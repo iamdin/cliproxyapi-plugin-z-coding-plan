@@ -221,8 +221,13 @@ func topTier(candidates []candidate, now time.Time) []string {
 func schedule(request []byte) map[string]any {
 	var req struct {
 		Candidates []candidate `json:"Candidates"`
+		Options    struct {
+			Headers  map[string][]string `json:"Headers"`
+			Metadata map[string]any      `json:"Metadata"`
+		} `json:"Options"`
 	}
 	_ = json.Unmarshal(request, &req)
+	session := sessionKey(req.Options.Headers, req.Options.Metadata)
 	// ponytail: polls every 200ms instead of a wake-up queue; waiters are not FIFO.
 	for start := time.Now(); zhipuOnly(req.Candidates); time.Sleep(pollEvery) {
 		mu.Lock()
@@ -232,7 +237,10 @@ func schedule(request []byte) map[string]any {
 			mu.Unlock()
 			break
 		}
-		id, ok := takeSlot(ids, now)
+		id, ok := takeSlot(ids, now, boundKey(session, now), now.Sub(start) < stickyWait)
+		if ok {
+			bind(session, id, now)
+		}
 		mu.Unlock()
 		if ok {
 			return map[string]any{"Handled": true, "AuthID": id}
@@ -277,6 +285,7 @@ func clearKeys() {
 	defer mu.Unlock()
 	blocked = map[string]time.Time{}
 	keys = map[string]*keyState{}
+	sticky = map[string]binding{}
 }
 
 func okResult(value any) []byte {
