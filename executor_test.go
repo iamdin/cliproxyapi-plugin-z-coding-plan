@@ -84,3 +84,45 @@ func TestForEachEventKeepsBytesAndSplitsOnBlankLines(t *testing.T) {
 		t.Fatalf("events %q", events)
 	}
 }
+
+func TestChatCompletionsGoToOpenAIEndpointWithBearer(t *testing.T) {
+	var gotBody []byte
+	var gotHeader http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		gotHeader = r.Header.Clone()
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1"}`))
+	}))
+	defer server.Close()
+	chatEndpoint = server.URL
+	t.Cleanup(func() { chatEndpoint = defaultChatEndpoint })
+
+	original := []byte(`{"model":"glm-5.3", "messages":[{"role":"user","content":"hi"}]}`)
+	raw, _ := json.Marshal(map[string]any{
+		"OriginalRequest": original, "SourceFormat": "openai",
+		"StorageJSON": []byte(`{"api_key":"zhipu-key"}`),
+		"Headers":     http.Header{"Authorization": {"Bearer cpa-client-key"}},
+	})
+	var env envelope
+	if err := json.Unmarshal(execute(raw), &env); err != nil || !env.OK {
+		t.Fatalf("execute failed: %+v", env.Error)
+	}
+	if !bytes.Equal(gotBody, original) || gotHeader.Get("Authorization") != "Bearer zhipu-key" || gotHeader.Get("X-Api-Key") != "" {
+		t.Fatalf("body %s headers %v", gotBody, gotHeader)
+	}
+}
+
+func TestSSEDataForOpenAIStreams(t *testing.T) {
+	cases := map[string]string{
+		"data: {\"a\":1}\n\n":         `{"a":1}`,
+		"data:{\"a\":1}\r\n\r\n":      `{"a":1}`,
+		": keep-alive\n\n":            "",
+		"data: [DONE]\n\n":            "",
+		"data: {\"a\":\ndata: 1}\n\n": "{\"a\":\n1}",
+	}
+	for in, want := range cases {
+		if got := string(sseData([]byte(in))); got != want {
+			t.Fatalf("%q -> %q, want %q", in, got, want)
+		}
+	}
+}

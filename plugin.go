@@ -70,7 +70,7 @@ func registration() map[string]any {
 		"schema_version": 6,
 		"metadata": map[string]any{
 			"Name":             "Z Coding Plan",
-			"Version":          "0.3.0",
+			"Version":          "0.4.0",
 			"Author":           "iamdin",
 			"GitHubRepository": "https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan",
 			"ConfigFields": []map[string]any{
@@ -78,6 +78,7 @@ func registration() map[string]any {
 				{"Name": "max-concurrency", "Type": "integer", "Default": 64, "Description": "每把智谱 Key 的最高目标并发"},
 				{"Name": "quota-warmup-times", "Type": "string", "Default": "", "Description": "北京时间，逗号分隔，如 03:00,08:00,13:00,18:00,23:00；到点用 1 token 请求开启每把 Key 的 5 小时窗口，留空关闭"},
 				{"Name": "quota-warmup-model", "Type": "string", "Default": defaultWarmupModel, "Description": "quota-warmup 请求使用的模型"},
+				{"Name": "chat-completions-endpoint", "Type": "string", "Default": defaultChatEndpoint, "Description": "原样转发的智谱 Coding Plan OpenAI chat completions 地址（核对转发时可指向本地抓包服务）"},
 				{"Name": "messages-endpoint", "Type": "string", "Default": defaultMessagesEndpoint, "Description": "原样转发的智谱 Anthropic Messages 地址（核对转发时可指向本地抓包服务）"},
 			},
 		},
@@ -90,8 +91,8 @@ func registration() map[string]any {
 			"model_provider":              true,
 			"executor":                    true,
 			"executor_model_scope":        "both",
-			"executor_input_formats":      []string{"claude"},
-			"executor_output_formats":     []string{"claude"},
+			"executor_input_formats":      []string{"claude", "chat-completions"},
+			"executor_output_formats":     []string{"claude", "chat-completions"},
 		},
 	}
 }
@@ -345,7 +346,7 @@ func httpDo(method, url string, headers map[string][]string, body []byte) (int, 
 
 // configure reads the plugin's config YAML: min-concurrency / max-concurrency (see sticky.go),
 // quota-warmup-times / quota-warmup-model (see warmup.go)
-// and messages-endpoint (see executor.go).
+// and messages-endpoint / chat-completions-endpoint (see executor.go).
 // ponytail: flat "key: value" lines only; swap in a YAML parser if nested config appears.
 func configure(request []byte) {
 	var req struct {
@@ -355,7 +356,7 @@ func configure(request []byte) {
 	lo, hi := defaultMinLimit, defaultMaxLimit
 	var times []int
 	model := defaultWarmupModel
-	endpoint := defaultMessagesEndpoint
+	endpoint, chat := defaultMessagesEndpoint, defaultChatEndpoint
 	for _, line := range strings.Split(string(req.ConfigYAML), "\n") {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
@@ -382,6 +383,10 @@ func configure(request []byte) {
 			if value != "" {
 				endpoint = value
 			}
+		case "chat-completions-endpoint":
+			if value != "" {
+				chat = value
+			}
 		}
 	}
 	mu.Lock()
@@ -390,7 +395,7 @@ func configure(request []byte) {
 		k.limit = min(maxLimit, max(minLimit, k.limit))
 	}
 	warmupTimes, warmupModel = times, model
-	messagesEndpoint = endpoint
+	messagesEndpoint, chatEndpoint = endpoint, chat
 	mu.Unlock()
 	restartWarmup()
 }
