@@ -81,3 +81,15 @@ func TestCredentialKey(t *testing.T) {
 		t.Fatalf("%q %v", key, ok)
 	}
 }
+
+func TestParseAuthPassesRequestRetry(t *testing.T) {
+	raw, _ := json.Marshal(map[string]any{"FileName": "z-coding-plan-1.json", "RawJSON": []byte(`{"type":"z-coding-plan","api_key":"k","request_retry":0}`)})
+	auth := parseAuth(raw)["Auth"].(map[string]any)
+	if meta, _ := auth["Metadata"].(map[string]any); meta["request_retry"] != 0 {
+		t.Fatalf("request_retry not passed to the host: %v", auth["Metadata"])
+	}
+	raw, _ = json.Marshal(map[string]any{"FileName": "z-coding-plan-2.json", "RawJSON": []byte(`{"type":"z-coding-plan","api_key":"k"}`)})
+	if _, ok := parseAuth(raw)["Auth"].(map[string]any)["Metadata"]; ok {
+		t.Fatal("no request_retry: leave host metadata alone")
+	}
+}

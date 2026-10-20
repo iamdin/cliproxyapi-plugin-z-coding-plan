@@ -70,7 +70,7 @@ func registration() map[string]any {
 		"schema_version": 6,
 		"metadata": map[string]any{
 			"Name":             "Z Coding Plan",
-			"Version":          "0.4.0",
+			"Version":          "0.4.1",
 			"Author":           "iamdin",
 			"GitHubRepository": "https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan",
 			"ConfigFields": []map[string]any{
@@ -109,6 +109,9 @@ func parseAuth(request []byte) map[string]any {
 		Type   string `json:"type"`
 		APIKey string `json:"api_key"`
 		Label  string `json:"label"`
+		// Host retry rounds for this key (CPA reads auth metadata "request_retry"); 0 means a
+		// failure goes straight back to the client instead of waiting out cooldowns and retrying.
+		RequestRetry *int `json:"request_retry"`
 	}
 	if json.Unmarshal(req.RawJSON, &file) != nil || file.Type != "z-coding-plan" || strings.TrimSpace(file.APIKey) == "" {
 		return map[string]any{"Handled": false}
@@ -120,16 +123,17 @@ func parseAuth(request []byte) map[string]any {
 	if id == "" {
 		id = file.Label
 	}
-	return map[string]any{
-		"Handled": true,
-		"Auth": map[string]any{
-			"Provider":    "z-coding-plan",
-			"ID":          id,
-			"FileName":    req.FileName,
-			"Label":       file.Label,
-			"StorageJSON": req.RawJSON,
-		},
+	auth := map[string]any{
+		"Provider":    "z-coding-plan",
+		"ID":          id,
+		"FileName":    req.FileName,
+		"Label":       file.Label,
+		"StorageJSON": req.RawJSON,
 	}
+	if file.RequestRetry != nil {
+		auth["Metadata"] = map[string]any{"request_retry": *file.RequestRetry}
+	}
+	return map[string]any{"Handled": true, "Auth": auth}
 }
 
 func fetchQuota(request []byte) (map[string]any, error) {

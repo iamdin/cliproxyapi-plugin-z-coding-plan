@@ -40,10 +40,11 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
         {
           "type": "z-coding-plan",
           "label": "Key 1",
-          "api_key": "智谱上游 Key"
+          "api_key": "智谱上游 Key",
+          "request_retry": 0
         }
 
-   type 必须是字符串 z-coding-plan。api_key 必填，填智谱上游 Key，不要填 CLIProxyAPI 的客户端访问密钥。api-key 也可以当作别名。label 可省略，省略时用去掉 .json 的文件名。宿主看到的凭证 id 是去掉 .json 的文件名。
+   type 必须是字符串 z-coding-plan。api_key 必填，填智谱上游 Key，不要填 CLIProxyAPI 的客户端访问密钥。api-key 也可以当作别名。label 可省略，省略时用去掉 .json 的文件名。宿主看到的凭证 id 是去掉 .json 的文件名。request_retry 可省略，插件把它交给宿主作为这把 Key 的额外重试轮数；设 0 时一轮里仍会换另一把 Key 试一次，但不再等冷却、多轮重试，两把都用完时客户端立刻收到 429，而不是卡几十秒。
 
    完成标准：每个文件都是合法 JSON，api_key 非空，type 正好是 z-coding-plan。
 
@@ -106,6 +107,6 @@ messages-endpoint、chat-completions-endpoint 可改转发地址，只用于核�
 
 ## 发布
 
-发布 tag 为 v0.4.0。附上 checksums.txt，以及每个平台一个 zip。zip 根目录只放动态库，例如 z-coding-plan_0.4.0_linux_amd64.zip 里直接是 z-coding-plan.so。
+发布 tag 为 v0.4.1。附上 checksums.txt，以及每个平台一个 zip。zip 根目录只放动态库，例如 z-coding-plan_0.4.1_linux_amd64.zip 里直接是 z-coding-plan.so。
 
 登记字段：id 为 z-coding-plan，name 为 Z Coding Plan，author 为 iamdin，repository 为 https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan，license 为 MIT。
