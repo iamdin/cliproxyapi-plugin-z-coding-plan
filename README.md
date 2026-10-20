@@ -21,7 +21,7 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
    完成标准：该路径存在，且文件名正好是 z-coding-plan.so。
 
-2. 在 CONFIG/config.yaml 里启用插件。宿主读 enabled 和 priority；min-concurrency、max-concurrency 见下文 1302 限流，quota-warmup-times、quota-warmup-model 见下文额度预热，都可省略。
+2. 在 CONFIG/config.yaml 里启用插件。宿主读 enabled 和 priority；quota-warmup-times、quota-warmup-model 见下文额度预热，都可省略。
 
         plugins:
           enabled: true
@@ -29,8 +29,6 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
             z-coding-plan:
               enabled: true
               priority: 1
-              min-concurrency: 8
-              max-concurrency: 64
               quota-warmup-times: "03:00,08:00,13:00,18:00,23:00"
 
    完成标准：plugins.enabled 为 true，且 plugins.configs.z-coding-plan.enabled 为 true。
@@ -74,13 +72,11 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 CPA 自带的 claude 执行器会改写请求（Claude Code 伪装、删 thinking、工具改名、地址加 ?beta=true），要让经 CPA 的调用与直连一致，就让 glm 只走本插件：
 
 - api-keys.claude 里承接智谱的条目用 excluded-models 排除这两个模型（或删掉条目），否则宿主会在两条路之间轮换；
-- 1302 换 Key 不冷却：在 oauth.request-scoped-errors 下给 z-coding-plan 配 status 429、match "1302"、action continue。
+- 1302 原样交回客户端：在 oauth.request-scoped-errors 下给 z-coding-plan 配 status 429、match "[1302]"、action stop，宿主不再换 Key 重试。匹配写带方括号的 [1302]，因为智谱的 request_id 以时间开头，13:02 前后的 1308 错误里也会出现 1302 这串数字。
 
 messages-endpoint 可改转发地址，只用于核对时指向本地录制转发，平时不要配。
 
 ## 1308 切换
-
-所有路由凭证都正常时，插件不参与选 Key。
 
 请求失败后，只有错误文本里的 1308 是独立数字，并且带有 YYYY-MM-DD HH:MM:SS 时间戳，才会停用那把凭证。时间按中国时间（UTC+8）读取，停用到该时刻。130812 不算。只有 1308、没有时间戳，也不停用。其他错误不停用。
 
@@ -88,15 +84,13 @@ messages-endpoint 可改转发地址，只用于核对时指向本地录制转�
 
 被停用的 id 是实际发出请求的宿主凭证 id，不是额度文件名，除非宿主路由用的就是那个文件。
 
-## 1302 限流
+## 1302 与会话固定
 
-候选全是智谱 Key（base_url 含 bigmodel.cn）时，插件按 Key 控制并发。每把 Key 起始允许 min-concurrency 个并发请求（默认 8），每成功一次慢慢加，最多 max-concurrency 个（默认 64）。宿主注册或重新配置插件时读取这两个值。
+插件不在网关做限流：1302 原样交回客户端，由客户端自己排队重试（配合上文 action stop）。
 
-收到 1302 时，这把 Key 的并发上限减半（不低于 min-concurrency），并暂停一段时间：2 秒起，连续限流翻倍，最长 60 秒，带随机抖动。同一波里同时回来的多个 1302 只算一次。暂停到期后成功一次，退避重新从 2 秒算。
+候选全是智谱 Key（base_url 含 bigmodel.cn）时由插件选 Key。同一个会话（Claude Code 的 X-Claude-Code-Session-Id、Codex 的 Session-Id 等，子任务跟随父会话）的请求固定用同一把 Key，智谱的提示缓存按账号计算，换 Key 会让缓存失效。1302、并发再多都不换；只有这把 Key 被 1308 停用才改用另一把并改绑。高优先级的 Key 恢复后，已绑定到别的 Key 的会话也不搬回去。绑定 1 小时内有效，只存在内存里。
 
-同一个会话（Claude Code 的 X-Claude-Code-Session-Id、Codex 的 Session-Id 等，子任务跟随父会话）的请求固定用同一把 Key，智谱的提示缓存按账号计算，换 Key 会让缓存失效。绑定 1 小时内有效，只存在内存里。绑定的 Key 满了先等最多 10 秒，仍然没有空位、或被 1302/1308 暂停时才改用另一把并改绑。没有会话标识的请求不固定，仍选空位最多的一把。
-
-没有空位的请求在选 Key 时排队，每 200 毫秒看一次，最多等 90 秒，超时后交回宿主。所有候选都因 1308 停用时不排队。占用的并发位置在请求结束时释放，5 分钟内没有结束记录也会自动释放。这些状态同样只在内存里。
+新会话和没有会话标识的请求用 priority 最高那一档里进行中请求最少的一把。进行中请求数在请求结束时减掉，5 分钟内没有结束记录也会自动清掉。
 
 ## 额度预热（quota-warmup）
 
@@ -108,6 +102,6 @@ messages-endpoint 可改转发地址，只用于核对时指向本地录制转�
 
 ## 发布
 
-发布 tag 为 v0.2.2。附上 checksums.txt，以及每个平台一个 zip。zip 根目录只放动态库，例如 z-coding-plan_0.2.2_linux_amd64.zip 里直接是 z-coding-plan.so。
+发布 tag 为 v0.3.0。附上 checksums.txt，以及每个平台一个 zip。zip 根目录只放动态库，例如 z-coding-plan_0.3.0_linux_amd64.zip 里直接是 z-coding-plan.so。
 
 登记字段：id 为 z-coding-plan，name 为 Z Coding Plan，author 为 iamdin，repository 为 https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan，license 为 MIT。
