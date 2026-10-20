@@ -44,8 +44,68 @@ func TestNewSessionsSpreadAndNeverWait(t *testing.T) {
 	if id := scheduleFor(t, "", a, b); id != "a" {
 		t.Fatalf("finished requests should free the key: %s", id)
 	}
-	if active("b", time.Now().Add(leaseTTL)) != 0 {
+	if load("b", time.Now().Add(leaseTTL)) != 0 {
 		t.Fatal("lost usage records should expire")
+	}
+}
+
+func TestTargetsSteerNewSessionsWithoutWaiting(t *testing.T) {
+	resetState(t)
+	low, high := zhipu("low", 0), zhipu("high", 10)
+	n := int(minLimit)
+	for i := 0; i < n; i++ {
+		if id := scheduleFor(t, "", low, high); id != "high" {
+			t.Fatalf("top tier until its target: %d %s", i, id)
+		}
+	}
+	if id := scheduleFor(t, "", low, high); id != "low" {
+		t.Fatalf("top tier at its target: overflow to the next tier, got %s", id)
+	}
+	for i := 1; i < n; i++ {
+		scheduleFor(t, "", low, high)
+	}
+	if id := scheduleFor(t, "", low, high); id != "high" {
+		t.Fatalf("everything at target: least loaded top-tier key, no waiting, got %s", id)
+	}
+
+	clearKeys()
+	a, b := zhipu("a", 0), zhipu("b", 0)
+	state("a").limit, state("b").limit = 16, 16
+	noteUsage([]byte(`{"AuthID":"a","Failed":true,"Failure":{"Body":"[1302][您的账户已达到速率限制]"}}`))
+	noteUsage([]byte(`{"AuthID":"a","Failed":true,"Failure":{"Body":"[1302][您的账户已达到速率限制]"}}`))
+	if keys["a"].limit != 8 {
+		t.Fatalf("1302 burst halves once: %v", keys["a"].limit)
+	}
+	got := map[string]int{}
+	for i := 0; i < 12; i++ {
+		got[scheduleFor(t, "", a, b)]++
+	}
+	if got["a"] != 4 || got["b"] != 8 {
+		t.Fatalf("new work should follow the targets 8:16: %v", got)
+	}
+	noteUsage([]byte(`{"AuthID":"b"}`))
+	if keys["b"].limit <= 16 {
+		t.Fatal("success should raise the target")
+	}
+}
+
+func TestConfigureReadsConcurrencyBounds(t *testing.T) {
+	resetState(t)
+	t.Cleanup(func() { configure(nil) })
+	state("a").limit = 100
+	raw, _ := json.Marshal(map[string]any{"config_yaml": []byte("enabled: true\npriority: 1\nmin-concurrency: 4\nmax-concurrency: 32\n")})
+	configure(raw)
+	if minLimit != 4 || maxLimit != 32 || keys["a"].limit != 32 {
+		t.Fatalf("min %v max %v limit %v", minLimit, maxLimit, keys["a"].limit)
+	}
+	raw, _ = json.Marshal(map[string]any{"config_yaml": []byte("min-concurrency: 16\nmax-concurrency: 2\n")})
+	configure(raw)
+	if minLimit != 16 || maxLimit != 16 {
+		t.Fatalf("max below min: %v %v", minLimit, maxLimit)
+	}
+	configure([]byte(`{"config_yaml":"ZW5hYmxlZDogdHJ1ZQo="}`))
+	if minLimit != defaultMinLimit || maxLimit != defaultMaxLimit {
+		t.Fatal("omitted fields should fall back to defaults")
 	}
 }
 

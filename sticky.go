@@ -7,50 +7,114 @@ import (
 
 // No throttling in the gateway: a 1302 goes straight back to the client, which owns queueing and
 // retries (CPA's request-scoped-errors rule for 1302 is "stop", so the host does not retry either).
-// The plugin only decides which key a request uses, and keeps each session on one key so
-// Zhipu's per-account prompt cache stays warm. A session leaves its key only when 1308 blocks it.
+// The plugin only decides which key a request uses:
+//   - a session stays on its key so Zhipu's per-account prompt cache stays warm; it moves only when
+//     1308 blocks that key;
+//   - new sessions go to a key below its target concurrency, highest priority first, least loaded
+//     within a tier. If every key is at its target, the least loaded top-tier key takes it anyway.
+//
+// Targets adapt per key (AIMD): each success adds 1/limit, a 1302 halves it (once per burst, not
+// below min-concurrency). Bounds: plugins.configs.z-coding-plan.min-concurrency / max-concurrency.
+var minLimit, maxLimit = defaultMinLimit, defaultMaxLimit // min is also the starting target
+
 const (
-	leaseTTL  = 5 * time.Minute // an in-flight mark whose usage record never arrives drops itself
-	stickyTTL = time.Hour
-	stickyMax = 10000
+	defaultMinLimit = 8.0
+	defaultMaxLimit = 64.0
+	burstWindow     = 2 * time.Second // 1302s within this window of a cut count as the same burst
+	leaseTTL        = 5 * time.Minute // an in-flight mark whose usage record never arrives drops itself
+	stickyTTL       = time.Hour
+	stickyMax       = 10000
 )
 
-var inflight = map[string][]time.Time{} // per key; only used to spread new sessions
+type keyState struct {
+	limit    float64
+	inflight []time.Time
+	lastCut  time.Time
+}
 
-func active(id string, now time.Time) int {
-	live := inflight[id][:0]
-	for _, at := range inflight[id] {
+var keys = map[string]*keyState{}
+
+func state(id string) *keyState {
+	k := keys[id]
+	if k == nil {
+		k = &keyState{limit: minLimit}
+		keys[id] = k
+	}
+	return k
+}
+
+// load is the key's in-flight count over its target; below 1 means it has room.
+func load(id string, now time.Time) float64 {
+	k := state(id)
+	live := k.inflight[:0]
+	for _, at := range k.inflight {
 		if now.Sub(at) < leaseTTL {
 			live = append(live, at)
 		}
 	}
-	inflight[id] = live
-	return len(live)
+	k.inflight = live
+	return float64(len(live)) / k.limit
 }
 
 func release(id string) {
-	if len(inflight[id]) > 0 {
-		inflight[id] = inflight[id][1:]
+	if k := keys[id]; k != nil && len(k.inflight) > 0 {
+		k.inflight = k.inflight[1:]
 	}
 }
 
-// pick returns the session's bound key while it is any open (not 1308-blocked) candidate, even
-// one outside the top priority tier, so a session never moves just because a key came back.
-// Otherwise it takes the least busy top-tier key (first wins ties) and binds the session to it.
-// Callers hold mu.
-func pick(ids, open []string, session string, now time.Time) string {
+func throttled(id string, now time.Time) {
+	k := state(id)
+	if now.Sub(k.lastCut) < burstWindow {
+		return
+	}
+	k.limit = max(minLimit, k.limit/2)
+	k.lastCut = now
+}
+
+func succeeded(id string) {
+	k := state(id)
+	k.limit = min(maxLimit, k.limit+1/k.limit)
+}
+
+// pick chooses a key from tiers (open keys grouped by priority, highest first; never empty),
+// marks it in flight and binds the session to it. Callers hold mu.
+func pick(tiers [][]string, session string, now time.Time) string {
 	id := boundKey(session, now)
-	if !contains(open, id) {
-		id = ids[0]
-		for _, c := range ids[1:] {
-			if active(c, now) < active(id, now) {
-				id = c
+	if !inTiers(tiers, id) {
+		id = ""
+		for _, tier := range tiers {
+			if best := leastLoaded(tier, now); load(best, now) < 1 {
+				id = best
+				break
 			}
 		}
+		if id == "" {
+			id = leastLoaded(tiers[0], now)
+		}
 	}
-	inflight[id] = append(inflight[id], now)
+	k := state(id)
+	k.inflight = append(k.inflight, now)
 	bind(session, id, now)
 	return id
+}
+
+func leastLoaded(ids []string, now time.Time) string {
+	best := ids[0]
+	for _, id := range ids[1:] {
+		if load(id, now) < load(best, now) {
+			best = id
+		}
+	}
+	return best
+}
+
+func inTiers(tiers [][]string, id string) bool {
+	for _, tier := range tiers {
+		if contains(tier, id) {
+			return true
+		}
+	}
+	return false
 }
 
 func contains(ids []string, id string) bool {

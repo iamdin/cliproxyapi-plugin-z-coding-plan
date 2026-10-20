@@ -3,6 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +74,8 @@ func registration() map[string]any {
 			"Author":           "iamdin",
 			"GitHubRepository": "https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan",
 			"ConfigFields": []map[string]any{
+				{"Name": "min-concurrency", "Type": "integer", "Default": 8, "Description": "每把智谱 Key 的起始和最低目标并发，只影响新会话分到哪把 Key，不排队"},
+				{"Name": "max-concurrency", "Type": "integer", "Default": 64, "Description": "每把智谱 Key 的最高目标并发"},
 				{"Name": "quota-warmup-times", "Type": "string", "Default": "", "Description": "北京时间，逗号分隔，如 03:00,08:00,13:00,18:00,23:00；到点用 1 token 请求开启每把 Key 的 5 小时窗口，留空关闭"},
 				{"Name": "quota-warmup-model", "Type": "string", "Default": defaultWarmupModel, "Description": "quota-warmup 请求使用的模型"},
 				{"Name": "messages-endpoint", "Type": "string", "Default": defaultMessagesEndpoint, "Description": "原样转发的智谱 Anthropic Messages 地址（核对转发时可指向本地抓包服务）"},
@@ -195,33 +200,25 @@ type candidate struct {
 	Attributes map[string]string `json:"Attributes"`
 }
 
-// topTier keeps the highest-priority candidates whose key is not blocked by 1308. The host hands
-// us every priority tier (scheduler_across_priorities), so a blocked high-priority key no longer
-// shadows the lower tier. Callers hold mu.
-func topTier(candidates []candidate, now time.Time) []string {
-	best, ids := 0, []string(nil)
-	for _, c := range candidates {
-		if blocked[c.ID].After(now) {
-			continue
-		}
-		if ids == nil || c.Priority > best {
-			best, ids = c.Priority, nil
-		}
-		if c.Priority == best {
-			ids = append(ids, c.ID)
-		}
-	}
-	return ids
-}
-
-func openKeys(candidates []candidate, now time.Time) []string {
-	var ids []string
+// tiers groups the candidates not blocked by 1308 by priority, highest first. The host hands us
+// every priority tier (scheduler_across_priorities), so a blocked high-priority key no longer
+// shadows the lower tier.
+func tiers(candidates []candidate, now time.Time) [][]string {
+	open := make([]candidate, 0, len(candidates))
 	for _, c := range candidates {
 		if !blocked[c.ID].After(now) {
-			ids = append(ids, c.ID)
+			open = append(open, c)
 		}
 	}
-	return ids
+	sort.SliceStable(open, func(i, j int) bool { return open[i].Priority > open[j].Priority })
+	var out [][]string
+	for i, c := range open {
+		if i == 0 || c.Priority != open[i-1].Priority {
+			out = append(out, nil)
+		}
+		out[len(out)-1] = append(out[len(out)-1], c.ID)
+	}
+	return out
 }
 
 func schedule(request []byte) map[string]any {
@@ -236,9 +233,8 @@ func schedule(request []byte) map[string]any {
 	if zhipuOnly(req.Candidates) {
 		mu.Lock()
 		now := time.Now()
-		ids := topTier(req.Candidates, now)
-		if len(ids) > 0 {
-			id := pick(ids, openKeys(req.Candidates, now), sessionKey(req.Options.Headers, req.Options.Metadata), now)
+		if t := tiers(req.Candidates, now); len(t) > 0 {
+			id := pick(t, sessionKey(req.Options.Headers, req.Options.Metadata), now)
 			mu.Unlock()
 			return map[string]any{"Handled": true, "AuthID": id}
 		}
@@ -268,8 +264,13 @@ func noteUsage(request []byte) {
 	mu.Lock()
 	defer mu.Unlock()
 	release(req.AuthID)
-	if until := resetAt(req.Failure.Body, now); until.After(now) {
+	switch until := resetAt(req.Failure.Body, now); {
+	case until.After(now):
 		blocked[req.AuthID] = until
+	case hasCode(req.Failure.Body, "1302"):
+		throttled(req.AuthID, now)
+	case !req.Failed:
+		succeeded(req.AuthID)
 	}
 }
 
@@ -277,7 +278,7 @@ func clearKeys() {
 	mu.Lock()
 	defer mu.Unlock()
 	blocked = map[string]time.Time{}
-	inflight = map[string][]time.Time{}
+	keys = map[string]*keyState{}
 	sticky = map[string]binding{}
 }
 
@@ -342,7 +343,8 @@ func httpDo(method, url string, headers map[string][]string, body []byte) (int, 
 	return response.StatusCode, response.Body, nil
 }
 
-// configure reads the plugin's config YAML: quota-warmup-times / quota-warmup-model (see warmup.go)
+// configure reads the plugin's config YAML: min-concurrency / max-concurrency (see sticky.go),
+// quota-warmup-times / quota-warmup-model (see warmup.go)
 // and messages-endpoint (see executor.go).
 // ponytail: flat "key: value" lines only; swap in a YAML parser if nested config appears.
 func configure(request []byte) {
@@ -350,6 +352,7 @@ func configure(request []byte) {
 		ConfigYAML []byte `json:"config_yaml"`
 	}
 	_ = json.Unmarshal(request, &req)
+	lo, hi := defaultMinLimit, defaultMaxLimit
 	var times []int
 	model := defaultWarmupModel
 	endpoint := defaultMessagesEndpoint
@@ -359,7 +362,16 @@ func configure(request []byte) {
 			continue
 		}
 		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		n, err := strconv.ParseFloat(value, 64)
 		switch strings.TrimSpace(key) {
+		case "min-concurrency":
+			if err == nil && n >= 1 {
+				lo = math.Floor(n)
+			}
+		case "max-concurrency":
+			if err == nil && n >= 1 {
+				hi = math.Floor(n)
+			}
 		case "quota-warmup-times":
 			times = parseTimes(value)
 		case "quota-warmup-model":
@@ -373,6 +385,10 @@ func configure(request []byte) {
 		}
 	}
 	mu.Lock()
+	minLimit, maxLimit = lo, max(lo, hi)
+	for _, k := range keys {
+		k.limit = min(maxLimit, max(minLimit, k.limit))
+	}
 	warmupTimes, warmupModel = times, model
 	messagesEndpoint = endpoint
 	mu.Unlock()

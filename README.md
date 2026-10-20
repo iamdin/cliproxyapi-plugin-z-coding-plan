@@ -21,7 +21,7 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
    完成标准：该路径存在，且文件名正好是 z-coding-plan.so。
 
-2. 在 CONFIG/config.yaml 里启用插件。宿主读 enabled 和 priority；quota-warmup-times、quota-warmup-model 见下文额度预热，都可省略。
+2. 在 CONFIG/config.yaml 里启用插件。宿主读 enabled 和 priority；min-concurrency、max-concurrency 见下文 1302 与会话固定，quota-warmup-times、quota-warmup-model 见下文额度预热，都可省略。
 
         plugins:
           enabled: true
@@ -29,6 +29,8 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
             z-coding-plan:
               enabled: true
               priority: 1
+              min-concurrency: 8
+              max-concurrency: 64
               quota-warmup-times: "03:00,08:00,13:00,18:00,23:00"
 
    完成标准：plugins.enabled 为 true，且 plugins.configs.z-coding-plan.enabled 为 true。
@@ -90,7 +92,7 @@ messages-endpoint 可改转发地址，只用于核对时指向本地录制转�
 
 候选全是智谱 Key（base_url 含 bigmodel.cn）时由插件选 Key。同一个会话（Claude Code 的 X-Claude-Code-Session-Id、Codex 的 Session-Id 等，子任务跟随父会话）的请求固定用同一把 Key，智谱的提示缓存按账号计算，换 Key 会让缓存失效。1302、并发再多都不换；只有这把 Key 被 1308 停用才改用另一把并改绑。高优先级的 Key 恢复后，已绑定到别的 Key 的会话也不搬回去。绑定 1 小时内有效，只存在内存里。
 
-新会话和没有会话标识的请求用 priority 最高那一档里进行中请求最少的一把。进行中请求数在请求结束时减掉，5 分钟内没有结束记录也会自动清掉。
+新会话和没有会话标识的请求按负载分 Key。每把 Key 有一个目标并发：起始为 min-concurrency（默认 8），每成功一次慢慢加，最多 max-concurrency（默认 64）；收到 1302 减半（同一波 2 秒内只算一次，不低于 min-concurrency）。分配时先看 priority 最高那一档，有 Key 没到目标就给其中最空的一把；这一档都到目标了就往下一档找；全部到目标也不排队，给最高档里最空的那把。目标并发只决定新请求去哪，不拦请求、不让已绑定的会话换 Key。进行中请求数在请求结束时减掉，5 分钟内没有结束记录也会自动清掉。这些状态都只在内存里。
 
 ## 额度预热（quota-warmup）
 
