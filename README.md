@@ -81,6 +81,15 @@ CPA 自带的 claude 执行器会改写请求（Claude Code 伪装、删 thinkin
 
 messages-endpoint、chat-completions-endpoint 可改转发地址，只用于核对时指向本地录制转发，平时不要配。
 
+## 日志
+
+每次发往智谱的调用在宿主日志里记一行（journalctl -u cliproxyapi | grep "zcp "），不含提示词、回复内容和 Key，会话只记 8 位哈希：
+
+    zcp upstream auth=z-coding-plan-2 fmt=anthropic stream=true session=3f41ff72 req_bytes=106 status=200 events=14 resp_bytes=1971 ttfb_ms=1627 total_ms=1868
+    zcp upstream auth=z-coding-plan-2 fmt=openai stream=false session=- req_bytes=37 status=429 code=1302 request_id=2026... ttfb_ms=316 total_ms=316
+
+失败时带智谱错误码和 request_id（可拿去找智谱核对）；流式中途断开带 error。另外三种事件各记一行：zcp key blocked by 1308（某把 Key 停用到何时）、zcp key 1302（目标并发从几降到几）、zcp session moved（会话换了 Key，正常只在 1308 时出现）。
+
 ## 1308 切换
 
 请求失败后，只有错误文本里的 1308 是独立数字，并且带有 YYYY-MM-DD HH:MM:SS 时间戳，才会停用那把凭证。时间按中国时间（UTC+8）读取，停用到该时刻。130812 不算。只有 1308、没有时间戳，也不停用。其他错误不停用。
@@ -107,6 +116,6 @@ messages-endpoint、chat-completions-endpoint 可改转发地址，只用于核�
 
 ## 发布
 
-发布 tag 为 v0.4.1。附上 checksums.txt，以及每个平台一个 zip。zip 根目录只放动态库，例如 z-coding-plan_0.4.1_linux_amd64.zip 里直接是 z-coding-plan.so。
+发布 tag 为 v0.4.2。附上 checksums.txt，以及每个平台一个 zip。zip 根目录只放动态库，例如 z-coding-plan_0.4.2_linux_amd64.zip 里直接是 z-coding-plan.so。
 
 登记字段：id 为 z-coding-plan，name 为 Z Coding Plan，author 为 iamdin，repository 为 https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan，license 为 MIT。

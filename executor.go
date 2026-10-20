@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // Passthrough executor: glm requests routed to z-coding-plan credentials go to Zhipu exactly as the
@@ -39,6 +42,9 @@ var hopHeaders = map[string]bool{
 }
 
 type executorRequest struct {
+	AuthID          string
+	Stream          bool
+	Metadata        map[string]any
 	Headers         http.Header
 	OriginalRequest []byte
 	StorageJSON     []byte
@@ -57,17 +63,20 @@ func authModels() map[string]any {
 
 // callUpstream sends the client's original body to Zhipu. On failure it returns an error
 // envelope carrying Zhipu's status and body, so 1302/1308 handling and host retries still work.
-func callUpstream(raw []byte) (*http.Response, executorRequest, []byte) {
+func callUpstream(raw []byte) (*http.Response, executorRequest, *trace, []byte) {
 	var req executorRequest
 	if err := json.Unmarshal(raw, &req); err != nil {
-		return nil, req, errorEnvelope("executor_error", "bad executor request: "+err.Error())
+		return nil, req, nil, errorEnvelope("executor_error", "bad executor request: "+err.Error())
 	}
+	t := newTrace(req)
 	key, ok := credentialKey(req.StorageJSON)
 	if !ok {
-		return nil, req, errorEnvelope("executor_error", "z-coding-plan credential has no api_key")
+		t.log("warn", "error=no-api-key")
+		return nil, req, t, errorEnvelope("executor_error", "z-coding-plan credential has no api_key")
 	}
 	if len(req.OriginalRequest) == 0 {
-		return nil, req, errorEnvelope("executor_error", "empty request body")
+		t.log("warn", "error=empty-body")
+		return nil, req, t, errorEnvelope("executor_error", "empty request body")
 	}
 	mu.Lock()
 	endpoint := messagesEndpoint
@@ -77,7 +86,8 @@ func callUpstream(raw []byte) (*http.Response, executorRequest, []byte) {
 	mu.Unlock()
 	httpReq, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(req.OriginalRequest))
 	if err != nil {
-		return nil, req, errorEnvelope("executor_error", err.Error())
+		t.log("warn", "error="+strconv.Quote(err.Error()))
+		return nil, req, t, errorEnvelope("executor_error", err.Error())
 	}
 	for name, values := range req.Headers {
 		if !hopHeaders[strings.ToLower(name)] {
@@ -91,14 +101,62 @@ func callUpstream(raw []byte) (*http.Response, executorRequest, []byte) {
 	}
 	resp, err := upstreamClient.Do(httpReq)
 	if err != nil {
-		return nil, req, errorEnvelope("upstream_error", err.Error(), http.StatusBadGateway)
+		t.log("warn", "status=502 error="+strconv.Quote(err.Error()))
+		return nil, req, t, errorEnvelope("upstream_error", err.Error(), http.StatusBadGateway)
 	}
+	t.headers = time.Now()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, req, errorEnvelope("upstream_error", string(body), resp.StatusCode)
+		t.log("warn", fmt.Sprintf("status=%d code=%s request_id=%s", resp.StatusCode, zhipuCode(body), requestID(body)))
+		return nil, req, t, errorEnvelope("upstream_error", string(body), resp.StatusCode)
 	}
-	return resp, req, nil
+	return resp, req, t, nil
+}
+
+// trace writes one log line per upstream call (journalctl -u cliproxyapi | grep "zcp upstream"):
+// key, format, session, Zhipu's status / error code / request_id, timing and sizes. Prompts,
+// responses and keys never go into it; the session id is logged as a short hash.
+type trace struct {
+	start, headers time.Time
+	head           string
+}
+
+func newTrace(req executorRequest) *trace {
+	format := "anthropic"
+	if req.SourceFormat == "openai" {
+		format = "openai"
+	}
+	session := sessionHash(sessionKey(req.Headers, req.Metadata))
+	return &trace{start: time.Now(), head: fmt.Sprintf("zcp upstream auth=%s fmt=%s stream=%t session=%s req_bytes=%d",
+		firstText(req.AuthID, "-"), format, req.Stream, session, len(req.OriginalRequest))}
+}
+
+func (t *trace) log(level, tail string) {
+	ttfb := ""
+	if !t.headers.IsZero() {
+		ttfb = fmt.Sprintf(" ttfb_ms=%d", t.headers.Sub(t.start).Milliseconds())
+	}
+	hostLog(level, fmt.Sprintf("%s %s%s total_ms=%d", t.head, tail, ttfb, time.Since(t.start).Milliseconds()))
+}
+
+var codePattern = regexp.MustCompile(`"code"\s*:\s*"?(\d+)`)
+
+func zhipuCode(body []byte) string {
+	if m := codePattern.FindSubmatch(body); m != nil {
+		return string(m[1])
+	}
+	return "-"
+}
+
+// requestID returns Zhipu's request id ("request_id", else the response "id") from a JSON body.
+func requestID(body []byte) string {
+	var v struct {
+		RequestID string `json:"request_id"`
+		ID        string `json:"id"`
+	}
+	_ = json.Unmarshal(body, &v)
+	return firstText(v.RequestID, v.ID, "-")
 }
 
 func responseHeaders(resp *http.Response) http.Header {
@@ -112,38 +170,43 @@ func responseHeaders(resp *http.Response) http.Header {
 }
 
 func execute(raw []byte) []byte {
-	resp, _, failed := callUpstream(raw)
+	resp, _, t, failed := callUpstream(raw)
 	if failed != nil {
 		return failed
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		t.log("warn", fmt.Sprintf("status=%d error=%s", resp.StatusCode, strconv.Quote(err.Error())))
 		return errorEnvelope("upstream_error", err.Error(), http.StatusBadGateway)
 	}
+	t.log("info", fmt.Sprintf("status=%d request_id=%s resp_bytes=%d", resp.StatusCode, requestID(body), len(body)))
 	return okResult(map[string]any{"Payload": body, "Headers": responseHeaders(resp)})
 }
 
 // executeStream answers once Zhipu has accepted the request, then relays the SSE body
 // event by event through host.stream.emit.
 func executeStream(raw []byte) []byte {
-	resp, req, failed := callUpstream(raw)
+	resp, req, t, failed := callUpstream(raw)
 	if failed != nil {
 		return failed
 	}
 	if req.StreamID == "" {
 		resp.Body.Close()
+		t.log("warn", "error=no-stream-id")
 		return errorEnvelope("executor_error", "stream_id is required")
 	}
-	go relay(resp.Body, req.StreamID, req.SourceFormat == "openai")
+	go relay(resp.Body, req.StreamID, req.SourceFormat == "openai", t)
 	return okResult(map[string]any{"headers": responseHeaders(resp)})
 }
 
 // relay emits Anthropic SSE events byte for byte. For OpenAI streams the host writes the SSE framing
 // itself ("data: <chunk>\n\n" plus its own [DONE]), so only each event's data goes through.
-func relay(body io.ReadCloser, streamID string, openai bool) {
+func relay(body io.ReadCloser, streamID string, openai bool, t *trace) {
 	defer body.Close()
+	events, size := 0, 0
 	err := forEachEvent(body, func(event []byte) error {
+		events, size = events+1, size+len(event)
 		if openai {
 			if event = sseData(event); event == nil {
 				return nil
@@ -155,6 +218,11 @@ func relay(body io.ReadCloser, streamID string, openai bool) {
 	if err != nil {
 		message = err.Error()
 	}
+	level, tail := "info", fmt.Sprintf("status=200 events=%d resp_bytes=%d", events, size)
+	if err != nil {
+		level, tail = "warn", tail+" error="+strconv.Quote(message)
+	}
+	t.log(level, tail)
 	_ = streamCall("host.stream.close", streamID, nil, message)
 }
 

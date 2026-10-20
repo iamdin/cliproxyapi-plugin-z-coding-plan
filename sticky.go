@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
 	"time"
 )
@@ -160,6 +162,15 @@ func sessionKey(headers map[string][]string, metadata map[string]any) string {
 		}
 	}
 	return ""
+}
+
+// sessionHash is how logs show a session: a short stable hash, "-" for none.
+func sessionHash(session string) string {
+	if session == "" {
+		return "-"
+	}
+	sum := sha256.Sum256([]byte(session))
+	return hex.EncodeToString(sum[:4])
 }
 
 func boundKey(session string, now time.Time) string {

@@ -126,3 +126,16 @@ func TestSSEDataForOpenAIStreams(t *testing.T) {
 		}
 	}
 }
+
+func TestTraceFieldsFromZhipuBodies(t *testing.T) {
+	body := []byte(`{"type":"error","error":{"type":"rate_limit_error","code":"1302","message":"[1302][x][r1]"},"request_id":"r1"}`)
+	if zhipuCode(body) != "1302" || requestID(body) != "r1" {
+		t.Fatal(zhipuCode(body), requestID(body))
+	}
+	if requestID([]byte(`{"id":"msg_1"}`)) != "msg_1" || zhipuCode([]byte(`{}`)) != "-" || requestID([]byte(`x`)) != "-" {
+		t.Fatal("fallbacks")
+	}
+	if sessionHash("") != "-" || len(sessionHash("s")) != 8 || sessionHash("s") == sessionHash("t") {
+		t.Fatal("session hash")
+	}
+}

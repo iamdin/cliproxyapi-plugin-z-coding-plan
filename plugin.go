@@ -70,7 +70,7 @@ func registration() map[string]any {
 		"schema_version": 6,
 		"metadata": map[string]any{
 			"Name":             "Z Coding Plan",
-			"Version":          "0.4.1",
+			"Version":          "0.4.2",
 			"Author":           "iamdin",
 			"GitHubRepository": "https://github.com/iamdin/cliproxyapi-plugin-z-coding-plan",
 			"ConfigFields": []map[string]any{
@@ -239,8 +239,13 @@ func schedule(request []byte) map[string]any {
 		mu.Lock()
 		now := time.Now()
 		if t := tiers(req.Candidates, now); len(t) > 0 {
-			id := pick(t, sessionKey(req.Options.Headers, req.Options.Metadata), now)
+			session := sessionKey(req.Options.Headers, req.Options.Metadata)
+			prev := boundKey(session, now)
+			id := pick(t, session, now)
 			mu.Unlock()
+			if prev != "" && prev != id {
+				hostLog("warn", "zcp session moved session="+sessionHash(session)+" from="+prev+" to="+id)
+			}
 			return map[string]any{"Handled": true, "AuthID": id}
 		}
 		mu.Unlock()
@@ -266,16 +271,25 @@ func noteUsage(request []byte) {
 		return
 	}
 	now := time.Now()
+	note := ""
 	mu.Lock()
-	defer mu.Unlock()
 	release(req.AuthID)
 	switch until := resetAt(req.Failure.Body, now); {
 	case until.After(now):
+		if !blocked[req.AuthID].After(now) {
+			note = "zcp key blocked by 1308 auth=" + req.AuthID + " until=" + until.In(beijing).Format("01-02 15:04:05")
+		}
 		blocked[req.AuthID] = until
 	case hasCode(req.Failure.Body, "1302"):
+		before := state(req.AuthID).limit
 		throttled(req.AuthID, now)
+		note = fmt.Sprintf("zcp key 1302 auth=%s target=%.1f->%.1f", req.AuthID, before, keys[req.AuthID].limit)
 	case !req.Failed:
 		succeeded(req.AuthID)
+	}
+	mu.Unlock()
+	if note != "" {
+		hostLog("warn", note)
 	}
 }
 
