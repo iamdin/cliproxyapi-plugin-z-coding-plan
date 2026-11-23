@@ -21,7 +21,7 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
    完成标准：该路径存在，且文件名正好是 z-coding-plan.so。
 
-2. 在 CONFIG/config.yaml 里启用插件。宿主读 enabled 和 priority；min-concurrency、max-concurrency 见下文 1302 与会话固定，quota-warmup-times、quota-warmup-model 见下文额度预热，都可省略。
+2. 在 CONFIG/config.yaml 里启用插件。宿主读 enabled 和 priority；min-concurrency、max-concurrency 见下文 1302 与会话固定，quota-warmup-times、quota-warmup-model 见下文额度预热，models、models-endpoint 见下文模型发现与原样转发，都可省略。
 
         plugins:
           enabled: true
@@ -48,9 +48,9 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
    完成标准：每个文件都是合法 JSON，api_key 非空，type 正好是 z-coding-plan。
 
-4. 额度认证文件同时是 glm-5.3、glm-5.3-flash 的路由凭证，请求由本插件原样转发给智谱，见下文原样转发。宿主上游配置里承接同一批 Key 的 glm 条目要排除这两个模型。
+4. 额度认证文件同时是智谱 Coding Plan 模型的路由凭证。插件会按每把 Key 动态请求智谱模型列表（失败时回退到配置项 models，未配置时默认 glm-5.3、glm-5.3-flash），请求由本插件原样转发给智谱，见下文原样转发。宿主上游配置里承接同一批 Key 的 glm 条目要排除本插件接管的模型。
 
-   完成标准：GET /v1/models 里有 glm-5.3，宿主日志里请求的凭证是 z-coding-plan 文件。
+   完成标准：GET /v1/models 里列出智谱 Coding Plan 模型，宿主日志里请求的凭证是 z-coding-plan 文件。
 
 5. 重启 CLIProxyAPI。替换 .so 不会影响已经加载它的进程。
 
@@ -70,16 +70,18 @@ CLIProxyAPI 插件。展示智谱 GLM Coding Plan 额度，并在智谱返回 13
 
 ## 原样转发
 
-插件同时是 glm-5.3、glm-5.3-flash 的执行器：路由到 z-coding-plan 凭证的 Anthropic Messages 请求，请求体按客户端发来的字节原样发到 https://open.bigmodel.cn/api/anthropic/v1/messages，客户端请求头原样带上，只把鉴权换成该凭证的 Key（X-Api-Key），并去掉逐跳头和转发头；响应按 SSE 事件原样流回。智谱的错误状态码和正文原样交回宿主，1302、1308 处理照旧。
+插件同时是智谱 Coding Plan 模型的提供方与执行器：宿主调用 model.for_auth 时，插件会用该凭证的 Key 请求 https://open.bigmodel.cn/api/coding/paas/v4/models 动态获取可用模型列表（内存按 Key 缓存 5 分钟，插件重载或退出时清空）。若上游请求失败、超时或返回空列表，会在日志中记录警告并回退到配置项 models（逗号分隔）；未配置 models 时回退到内置默认值 glm-5.3,glm-5.3-flash。
+
+路由到 z-coding-plan 凭证的 Anthropic Messages 请求，请求体按客户端发来的字节原样发到 https://open.bigmodel.cn/api/anthropic/v1/messages，客户端请求头原样带上，只把鉴权换成该凭证的 Key（X-Api-Key），并去掉逐跳头和转发头；响应按 SSE 事件原样流回。智谱的错误状态码和正文原样交回宿主，1302、1308 处理照旧。
 
 OpenAI chat completions 请求（/v1/chat/completions）同样原样发到智谱 Coding Plan 的 OpenAI 接口 https://open.bigmodel.cn/api/coding/paas/v4/chat/completions，鉴权换成 Authorization: Bearer 该凭证的 Key，宿主不做格式转换。流式响应只交出每个 SSE 事件的 data 内容，data: 前缀和 [DONE] 由宿主按 OpenAI 格式重新加上，客户端拿到的 data 与智谱逐条一致。这条路径上智谱的错误正文也原样到客户端。智谱 OpenAI 接口的提示缓存要客户端带稳定的会话头（如 X-Session-Id）才稳定命中，插件会把它原样带上。
 
 CPA 自带的 claude 执行器会改写请求（Claude Code 伪装、删 thinking、工具改名、地址加 ?beta=true），要让经 CPA 的调用与直连一致，就让 glm 只走本插件：
 
-- api-keys.claude 里承接智谱的条目用 excluded-models 排除这两个模型（或删掉条目），否则宿主会在两条路之间轮换；
+- api-keys.claude 里承接智谱的条目用 excluded-models 排除本插件接管的模型（或删掉条目），否则宿主会在两条路之间轮换；
 - 1302 原样交回客户端：在 oauth.request-scoped-errors 下给 z-coding-plan 配 status 429、match "[1302]"、action stop，宿主不再换 Key 重试。匹配写带方括号的 [1302]，因为智谱的 request_id 以时间开头，13:02 前后的 1308 错误里也会出现 1302 这串数字。
 
-messages-endpoint、chat-completions-endpoint 可改转发地址，只用于核对时指向本地录制转发，平时不要配。
+models 可指定动态拉取模型失败时的回退列表（如 "glm-5.3,glm-5.3-flash"）。models-endpoint、messages-endpoint、chat-completions-endpoint 可改上游地址，只用于测试或核对时指向本地服务，平时不要配。
 
 ## 日志
 
