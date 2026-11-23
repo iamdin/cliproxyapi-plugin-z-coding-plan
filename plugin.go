@@ -55,7 +55,7 @@ func dispatch(method string, request []byte) ([]byte, error) {
 	case "model.static":
 		return okResult(map[string]any{"Provider": "z-coding-plan"}), nil
 	case "model.for_auth":
-		return okResult(authModels()), nil
+		return okResult(authModels(request)), nil
 	case "executor.execute":
 		return execute(request), nil
 	case "executor.execute_stream":
@@ -80,6 +80,8 @@ func registration() map[string]any {
 				{"Name": "quota-warmup-model", "Type": "string", "Default": defaultWarmupModel, "Description": "quota-warmup 请求使用的模型"},
 				{"Name": "chat-completions-endpoint", "Type": "string", "Default": defaultChatEndpoint, "Description": "原样转发的智谱 Coding Plan OpenAI chat completions 地址（核对转发时可指向本地抓包服务）"},
 				{"Name": "messages-endpoint", "Type": "string", "Default": defaultMessagesEndpoint, "Description": "原样转发的智谱 Anthropic Messages 地址（核对转发时可指向本地抓包服务）"},
+				{"Name": "models", "Type": "string", "Default": strings.Join(defaultFallbackModels, ","), "Description": "动态拉取模型列表失败时的回退模型列表（逗号分隔），留空使用内置默认值"},
+				{"Name": "models-endpoint", "Type": "string", "Default": defaultModelsEndpoint, "Description": "动态拉取智谱 Coding Plan 模型列表的地址（测试或抓包时可指向本地服务）"},
 			},
 		},
 		"capabilities": map[string]any{
@@ -299,6 +301,8 @@ func clearKeys() {
 	blocked = map[string]time.Time{}
 	keys = map[string]*keyState{}
 	sticky = map[string]binding{}
+	modelsCache = map[string]cachedModels{}
+	modelsCacheGen++
 }
 
 func okResult(value any) []byte {
@@ -363,8 +367,9 @@ func httpDo(method, url string, headers map[string][]string, body []byte) (int, 
 }
 
 // configure reads the plugin's config YAML: min-concurrency / max-concurrency (see sticky.go),
-// quota-warmup-times / quota-warmup-model (see warmup.go)
-// and messages-endpoint / chat-completions-endpoint (see executor.go).
+// quota-warmup-times / quota-warmup-model (see warmup.go),
+// messages-endpoint / chat-completions-endpoint (see executor.go),
+// and models / models-endpoint (see models.go).
 // ponytail: flat "key: value" lines only; swap in a YAML parser if nested config appears.
 func configure(request []byte) {
 	var req struct {
@@ -375,6 +380,8 @@ func configure(request []byte) {
 	var times []int
 	model := defaultWarmupModel
 	endpoint, chat := defaultMessagesEndpoint, defaultChatEndpoint
+	models := append([]string(nil), defaultFallbackModels...)
+	modelsURL := defaultModelsEndpoint
 	for _, line := range strings.Split(string(req.ConfigYAML), "\n") {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok {
@@ -405,6 +412,14 @@ func configure(request []byte) {
 			if value != "" {
 				chat = value
 			}
+		case "models":
+			if parsed := parseModelList(value); len(parsed) > 0 {
+				models = parsed
+			}
+		case "models-endpoint":
+			if value != "" {
+				modelsURL = value
+			}
 		}
 	}
 	mu.Lock()
@@ -414,6 +429,9 @@ func configure(request []byte) {
 	}
 	warmupTimes, warmupModel = times, model
 	messagesEndpoint, chatEndpoint = endpoint, chat
+	fallbackModels, modelsEndpoint = models, modelsURL
+	modelsCache = map[string]cachedModels{}
+	modelsCacheGen++
 	mu.Unlock()
 	restartWarmup()
 }

@@ -25,10 +25,9 @@ const (
 )
 
 var (
-	messagesEndpoint  = defaultMessagesEndpoint // plugins.configs.z-coding-plan.messages-endpoint
-	chatEndpoint      = defaultChatEndpoint     // plugins.configs.z-coding-plan.chat-completions-endpoint
-	passthroughModels = []string{"glm-5.3", "glm-5.3-flash"}
-	upstreamClient    = &http.Client{} // no timeout: thinking streams run for minutes
+	messagesEndpoint = defaultMessagesEndpoint // plugins.configs.z-coding-plan.messages-endpoint
+	chatEndpoint     = defaultChatEndpoint     // plugins.configs.z-coding-plan.chat-completions-endpoint
+	upstreamClient   = &http.Client{}          // no timeout: thinking streams run for minutes
 )
 
 // Client headers that belong to the hop to CPA (or carry CPA's own credentials) and must not reach Zhipu.
@@ -50,15 +49,6 @@ type executorRequest struct {
 	StorageJSON     []byte
 	SourceFormat    string // "openai" for /v1/chat/completions, "claude" for /v1/messages
 	StreamID        string `json:"stream_id"`
-}
-
-func authModels() map[string]any {
-	models := make([]map[string]any, len(passthroughModels))
-	for i, id := range passthroughModels {
-		// UserDefined: the host passes thinking settings through instead of judging them.
-		models[i] = map[string]any{"ID": id, "Object": "model", "OwnedBy": "zhipu", "UserDefined": true}
-	}
-	return map[string]any{"Provider": "z-coding-plan", "Models": models}
 }
 
 // callUpstream sends the client's original body to Zhipu. On failure it returns an error
